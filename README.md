@@ -1,2 +1,3 @@
 # MapReduce
-MapReduce distributed system written in Golang, specifically for online shops recommendations.
+MapReduce distributed system written in Golang.
+Specifically for building search index.
