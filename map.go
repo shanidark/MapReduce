@@ -9,43 +9,52 @@ import (
 	"regexp"
 )
 
+var reg_nonWord = regexp.MustCompile("[^a-zA-Z0-9]+")
+
 func Process(word string) string {
-	re, e := regexp.Compile("[^a-zA-Z0-9]+")
-	check(e)
-	return re.ReplaceAllString(word, "")
+	return reg_nonWord.ReplaceAllString(word, "")
 }
 
 
-func Map(input KeyValue) {
-	docname := input.key
-	content := input.value
+func Map(chunk Chunk, numPartitions uint64) {
+	docname := strconv.Itoa(chunk.FileID)
+	content := string(chunk.Data)
 	var result []KeyValue
-
-	text := strings.Split(content, " ")
+	
+	text := strings.Fields(content)
 	for _, entry := range(text) {
 		word := Process(entry)
+		if word == "" {
+			continue
+		}
+
 		var kv KeyValue
 		kv.key = word
 		kv.value = docname
 		result = append(result, kv)
 	}
 
-	Write(result, 3)
+	Write(result, numPartitions)
 }
 
 func Write(inp []KeyValue, n uint64) {
+	if n == 0 || len(inp) == 0 {
+		return
+	}
 	dir, e := os.Getwd()
 	check(e)
 
 	var writers []*bufio.Writer
+	var files []*os.File
 	for i := range(n) {
 		path := filepath.Join(dir, "reduce-worker-" + strconv.FormatUint(i, 10))
-		f, e := os.Create(path)
+		f, e := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)	
+		check(e)
+		files = append(files, f)
 		writer := bufio.NewWriter(f)
 		writers = append(writers, writer)
-		check(e)
 	}
-
+	
 
 	for _, entry := range(inp) {
 		hash := Hash(entry.key) % n
@@ -55,6 +64,10 @@ func Write(inp []KeyValue, n uint64) {
 	}
 
 	for _, writer := range(writers) {
-		writer.Flush()
+		check(writer.Flush())
+	}
+
+	for _, file := range(files) {
+		check(file.Close())
 	}
 }
