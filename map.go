@@ -17,12 +17,10 @@ func Process(word string) string {
 	return reg_nonWord.ReplaceAllString(word, "")
 }
 
-func Map(chunk Chunk, workerID int, numPartitions uint64, dir string) MapResult {
-	docname := strconv.Itoa(chunk.FileID)
-	content := string(chunk.Data)
-
+func OpenWorkerContext(workerID int, numPartitions uint64, dir string) WorkerContext {
 	files := make([]*os.File, numPartitions)
 	writers := make([]*bufio.Writer, numPartitions)
+	partitionFiles := make(map[int]string, numPartitions)
 	for i := range numPartitions {
 		name := spillFilePrefix + strconv.Itoa(workerID) + "-" + strconv.FormatUint(i, 10)
 		path := filepath.Join(dir, name)
@@ -30,27 +28,39 @@ func Map(chunk Chunk, workerID int, numPartitions uint64, dir string) MapResult 
 		check(e)
 		files[i] = f
 		writers[i] = bufio.NewWriter(f)
+		partitionFiles[int(i)] = path
 	}
+	return WorkerContext{
+		writers:        writers,
+		files:          files,
+		PartitionFiles: partitionFiles,
+	}
+}
 
-	for _, entry := range strings.Fields(content) {
+func (wc *WorkerContext) Close() {
+	for i, w := range wc.writers {
+		ensure(w.Flush())
+		ensure(wc.files[i].Close())
+	}
+}
+
+func Map(chunk Chunk, wc *WorkerContext) MapResult {
+	docname := strconv.Itoa(chunk.FileID)
+	n := uint64(len(wc.writers))
+
+	for _, entry := range strings.Fields(string(chunk.Data)) {
 		word := Process(entry)
 		if word == "" {
 			continue
 		}
-		hash := Hash(word) % numPartitions
-		_, e := writers[hash].WriteString(word + " -> " + docname + "\n")
+		hash := Hash(word) % n
+		_, e := wc.writers[hash].WriteString(word + " -> " + docname + "\n")
 		check(e)
 	}
 
-	partitionFiles := make(map[int]string, numPartitions)
-	for i, w := range writers {
-		ensure(w.Flush())
-		ensure(files[i].Close())
-		partitionFiles[i] = files[i].Name()
-	}
 	return MapResult{
 		FileID:         chunk.FileID,
 		ChunkID:        chunk.ChunkID,
-		PartitionFiles: partitionFiles,
+		PartitionFiles: wc.PartitionFiles,
 	}
 }

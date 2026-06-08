@@ -76,8 +76,11 @@ func TestMap_writesToCorrectPartition(t *testing.T) {
 	const n = 4
 	dir := t.TempDir()
 
+	wc := OpenWorkerContext(0, n, dir)
+
 	chunk := Chunk{FileID: 0, ChunkID: 0, Data: []byte("hello world hello")}
-	result := Map(chunk, 0, n, dir)
+	result := Map(chunk, &wc)
+	wc.Close()
 
 	for _, word := range []string{"hello", "world"} {
 		expectedPartition := int(Hash(word) % n)
@@ -96,10 +99,12 @@ func TestMap_skipsEmptyTokens(t *testing.T) {
 	const n = 2
 	dir := t.TempDir()
 
+	wc := OpenWorkerContext(0, n, dir)
 	chunk := Chunk{FileID: 1, Data: []byte("... ,,, !!!")}
-	result := Map(chunk, 0, n, dir)
+	Map(chunk, &wc)
+	wc.Close()
 
-	for _, path := range result.PartitionFiles {
+	for _, path := range wc.PartitionFiles {
 		data, _ := os.ReadFile(path)
 		if len(data) > 0 {
 			t.Errorf("expected empty partition, got %q in %s", data, path)

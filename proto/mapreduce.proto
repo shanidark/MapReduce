@@ -1,0 +1,45 @@
+syntax = "proto3";
+option go_package = "mapreduce/proto";
+
+service Master {
+    rpc RegisterWorker(WorkerInfo) returns (Ack);
+    rpc RequestTask(TaskRequest) returns (Task);
+    rpc ReportDone(TaskDone) returns (Ack);
+}
+
+service Worker {
+    rpc FetchSpill(FetchSpillRequest) returns (stream SpillChunk);
+    rpc FetchResult(FetchResultRequest) returns (stream SpillChunk);
+}
+
+message WorkerInfo { string addr = 1; }
+message Ack {}
+message TaskRequest { string worker_addr = 1; }
+
+message Task {
+    enum Type { IDLE = 0; MAP = 1; REDUCE = 2; SHUTDOWN = 3; }
+    Type type = 1;
+    int32 task_id = 2;
+    string file_path = 3;    // map: путь к фалу
+    int32 partition = 4;     // reduce: номер партиции
+    repeated string spill_addrs = 5; // reduce: адреса воркеров с нужными файлами
+    int32 num_partitions = 6;
+}
+
+message TaskDone {
+    string worker_addr = 1;
+    int32 task_id = 2;
+    int32 num_created_partitions = 3; // map : сколько партиций создалось
+}
+
+message FetchSpillRequest {
+    int32 partition = 2;
+}
+
+message FetchResultRequest {
+    int32 partition = 1;
+}
+
+message SpillChunk {
+    bytes data = 1;
+}
