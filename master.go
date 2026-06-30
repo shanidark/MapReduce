@@ -9,9 +9,7 @@ import (
 
 func (m *masterImpl) RegisterWorker(_ context.Context,
 	info *pb.WorkerInfo) (*pb.Ack, error) {
-	log.Printf("RegisterWorker called by %s, waiting for lock...", info.Addr)
 	m.mtx.Lock()
-	log.Printf("RegisterWorker got lock for %s", info.Addr)
 	defer m.mtx.Unlock()
 
 	for _, addr := range m.workers {
@@ -130,6 +128,12 @@ func (m *masterImpl) checkTimeouts(timeout time.Duration) {
 				}
 			}
 			delete(m.lastSeen, addr)
+			for i, w := range m.workers {
+				if w == addr {
+					m.workers = append(m.workers[:i], m.workers[i+1:]...)
+					break
+				}
+			}
 		}
 	}
 }
