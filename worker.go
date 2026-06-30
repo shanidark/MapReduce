@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"log"
 	pb "mapreduce/proto"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	grpc "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -62,7 +64,7 @@ func (w *workerImpl) FetchSpill(req *pb.FetchSpillRequest,
 
 }
 
-// / DO MAP
+// DO MAP
 func OpenMapTaskContext(taskID int, numPartitions uint64, dir string) WorkerContext {
 	files := make([]*os.File, numPartitions)
 	writers := make([]*bufio.Writer, numPartitions)
@@ -86,6 +88,8 @@ func OpenMapTaskContext(taskID int, numPartitions uint64, dir string) WorkerCont
 
 func doMap(task *pb.Task, dir string, my_addr string,
 	mc pb.MasterClient, ctx context.Context) {
+	log.Printf("doMap starting for task %d", task.TaskId)
+	time.Sleep(20 * time.Second)
 	n := uint64(task.NumPartitions)
 	taskID := int(task.TaskId)
 
@@ -241,6 +245,22 @@ func (w *workerImpl) FetchResult(req *pb.FetchResultRequest,
 		}
 		if err != nil {
 			return err
+		}
+	}
+}
+
+func heartbeatLoop(ctx context.Context, mc pb.MasterClient, myAddr string) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_, err := mc.Heartbeat(ctx, &pb.HeartbeatRequest{WorkerAddr: myAddr})
+			if err != nil {
+				log.Printf("heartbeat error: %v", err)
+			}
 		}
 	}
 }

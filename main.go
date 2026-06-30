@@ -192,6 +192,7 @@ func runMaster(inputFiles []string, min_workers int) {
 		numPartitions: numPartitions,
 		minWorkers:    min_workers,
 		done:          make(chan struct{}),
+		lastSeen:      make(map[string]time.Time),
 	}
 
 	lis, e := net.Listen("tcp", ":50051")
@@ -200,11 +201,26 @@ func runMaster(inputFiles []string, min_workers int) {
 	pb.RegisterMasterServer(s, impl)
 	log.Println("master listening on :50051")
 
+	stopChecker := make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopChecker:
+				return
+			case <-ticker.C:
+				impl.checkTimeouts(5 * time.Second)
+			}
+		}
+	}()
+
 	go func() {
 		// waiting till anything appears in impl.done channel,
 		// as smth can appear there only when all reduces are done
 		<-impl.done
-
+		close(stopChecker)
 		log.Println("all reduces are done, collecting results...")
 		collectResults(impl, dir)
 		log.Println("done, shutting fown...")
@@ -238,6 +254,8 @@ func runWorker(m_addr, my_addr string) {
 	check(err)
 	log.Printf("registered with master")
 
+	go heartbeatLoop(ctx, master_client, my_addr)
+
 	lis, err := net.Listen("tcp", my_addr)
 	check(err)
 	s := grpc.NewServer()
@@ -251,7 +269,9 @@ func runWorker(m_addr, my_addr string) {
 			log.Printf("RequestTask error: %v", err)
 			return
 		}
-		log.Printf("got task type=%v id=%d", task.Type, task.TaskId)
+		if task.Type != pb.Task_IDLE {
+			log.Printf("got task type=%v id=%d", task.Type, task.TaskId)
+		}
 		switch task.Type {
 		case pb.Task_MAP:
 			doMap(task, dir, my_addr, master_client, ctx)

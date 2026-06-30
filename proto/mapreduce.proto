@@ -5,6 +5,7 @@ service Master {
     rpc RegisterWorker(WorkerInfo) returns (Ack);
     rpc RequestTask(TaskRequest) returns (Task);
     rpc ReportDone(TaskDone) returns (Ack);
+    rpc Heartbeat(HeartbeatRequest) returns (Ack);
 }
 
 service Worker {
@@ -38,6 +39,10 @@ message FetchSpillRequest {
 
 message FetchResultRequest {
     int32 partition = 1;
+}
+
+message HeartbeatRequest {
+    string worker_addr = 1;
 }
 
 message SpillChunk {

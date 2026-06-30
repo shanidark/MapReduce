@@ -6,6 +6,9 @@ Currently indexes only by one word. (n-gramms planned, WIP)
 ### Build
 Builds simply with `go build`. 
 
+### Features
+ * Heartbeats (timed-out workers will be re-registered after restarting it)
+
 ### Usage
 Can be launched in 2 modes: `master` & `worker`. Files that are meant to be indexed must be on master machine.
 #### Master

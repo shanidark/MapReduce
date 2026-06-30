@@ -2,7 +2,10 @@ package main
 
 import (
 	"bufio"
+	pb "mapreduce/proto"
 	"os"
+	"sync"
+	"time"
 )
 
 type Chunk struct {
@@ -37,4 +40,45 @@ type WorkerContext struct {
 type partitionResult struct {
 	partition int
 	kvs       []KeyValue
+}
+
+type taskState int
+
+const (
+	taskIdle taskState = iota
+	taskRunning
+	taskDone
+)
+
+type masterImpl struct {
+	pb.UnimplementedMasterServer
+
+	mtx        sync.Mutex
+	workers    []string
+	minWorkers int
+
+	mapTasks      []mapTask
+	reduceTasks   []reduceTask
+	mapDone       int
+	reduceDone    int
+	numPartitions int
+
+	lastSeen map[string]time.Time
+
+	allDone bool
+	done    chan struct{}
+}
+
+type mapTask struct {
+	id         int
+	filePath   string
+	state      taskState
+	workerAddr string
+}
+
+type reduceTask struct {
+	id         int
+	partition  int
+	state      taskState
+	workerAddr string
 }

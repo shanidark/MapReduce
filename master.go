@@ -4,46 +4,8 @@ import (
 	"context"
 	"log"
 	pb "mapreduce/proto"
-	"sync"
+	"time"
 )
-
-type taskState int
-
-const (
-	taskIdle taskState = iota
-	taskRunning
-	taskDone
-)
-
-type masterImpl struct {
-	pb.UnimplementedMasterServer
-
-	mtx        sync.Mutex
-	workers    []string
-	minWorkers int
-
-	mapTasks      []mapTask
-	reduceTasks   []reduceTask
-	mapDone       int
-	reduceDone    int
-	numPartitions int
-
-	allDone bool
-	done    chan struct{}
-}
-
-type mapTask struct {
-	id       int
-	filePath string
-	state    taskState
-}
-
-type reduceTask struct {
-	id         int
-	partition  int
-	state      taskState
-	workerAddr string
-}
 
 func (m *masterImpl) RegisterWorker(_ context.Context,
 	info *pb.WorkerInfo) (*pb.Ack, error) {
@@ -51,7 +13,17 @@ func (m *masterImpl) RegisterWorker(_ context.Context,
 	m.mtx.Lock()
 	log.Printf("RegisterWorker got lock for %s", info.Addr)
 	defer m.mtx.Unlock()
+
+	for _, addr := range m.workers {
+		if addr == info.Addr {
+			m.lastSeen[info.Addr] = time.Now()
+			log.Printf("worker %s registered again (already known)", info.Addr)
+			return &pb.Ack{}, nil
+		}
+	}
+
 	m.workers = append(m.workers, info.Addr)
+	m.lastSeen[info.Addr] = time.Now()
 	log.Printf("registered worker: %s, total: %d", info.Addr, len(m.workers))
 	return &pb.Ack{}, nil
 }
@@ -69,6 +41,7 @@ func (m *masterImpl) RequestTask(_ context.Context,
 		task := &m.mapTasks[i]
 		if task.state == taskIdle {
 			task.state = taskRunning
+			task.workerAddr = req.WorkerAddr
 			log.Printf("→ task to %s: type=%v id=%d", req.WorkerAddr, pb.Task_MAP, int32(task.id))
 			return &pb.Task{
 				Type:          pb.Task_MAP,
@@ -80,7 +53,6 @@ func (m *masterImpl) RequestTask(_ context.Context,
 	}
 
 	if m.mapDone < len(m.mapTasks) {
-		log.Printf("→ task to %s: type=%v", req.WorkerAddr, pb.Task_IDLE)
 		return &pb.Task{Type: pb.Task_IDLE}, nil
 	}
 
@@ -130,4 +102,34 @@ func (m *masterImpl) ReportDone(_ context.Context,
 		}
 	}
 	return &pb.Ack{}, nil
+}
+
+func (m *masterImpl) Heartbeat(_ context.Context,
+	req *pb.HeartbeatRequest) (*pb.Ack, error) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	m.lastSeen[req.WorkerAddr] = time.Now()
+	return &pb.Ack{}, nil
+}
+
+func (m *masterImpl) checkTimeouts(timeout time.Duration) {
+	m.mtx.Lock()
+	defer m.mtx.Unlock()
+	now := time.Now()
+	for addr, last := range m.lastSeen {
+		if now.Sub(last) > timeout {
+			log.Printf("worker %s timed out, reclaiming tasks", addr)
+			for i := range m.mapTasks {
+				if m.mapTasks[i].state == taskRunning && m.mapTasks[i].workerAddr == addr {
+					m.mapTasks[i].state = taskIdle
+				}
+			}
+			for i := range m.reduceTasks {
+				if m.reduceTasks[i].state == taskRunning && m.reduceTasks[i].workerAddr == addr {
+					m.reduceTasks[i].state = taskIdle
+				}
+			}
+			delete(m.lastSeen, addr)
+		}
+	}
 }
