@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	pb "mapreduce/proto"
 	"time"
 )
@@ -15,14 +15,14 @@ func (m *masterImpl) RegisterWorker(_ context.Context,
 	for _, addr := range m.workers {
 		if addr == info.Addr {
 			m.lastSeen[info.Addr] = time.Now()
-			log.Printf("worker %s registered again (already known)", info.Addr)
+			slog.Info("worker registered again (already known)", "worker_addr", info.Addr)
 			return &pb.Ack{}, nil
 		}
 	}
 
 	m.workers = append(m.workers, info.Addr)
 	m.lastSeen[info.Addr] = time.Now()
-	log.Printf("registered worker: %s, total: %d", info.Addr, len(m.workers))
+	slog.Info("registered worker", "worker_addr", info.Addr, "total_workers", len(m.workers))
 	return &pb.Ack{}, nil
 }
 
@@ -40,7 +40,7 @@ func (m *masterImpl) RequestTask(_ context.Context,
 		if task.state == taskIdle {
 			task.state = taskRunning
 			task.workerAddr = req.WorkerAddr
-			log.Printf("→ task to %s: type=%v id=%d", req.WorkerAddr, pb.Task_MAP, int32(task.id))
+			slog.Info("given task", "worker_addr", req.WorkerAddr, "task_type", pb.Task_MAP, "task_id", int32(task.id))
 			return &pb.Task{
 				Type:          pb.Task_MAP,
 				TaskId:        int32(task.id),
@@ -59,7 +59,7 @@ func (m *masterImpl) RequestTask(_ context.Context,
 		task := &m.reduceTasks[i]
 		if task.state == taskIdle {
 			task.state = taskRunning
-			log.Printf("→ task to %s: type=%v id=%d", req.WorkerAddr, pb.Task_REDUCE, int32(task.id))
+			slog.Info("given task", "worker_addr", req.WorkerAddr, "task_type", pb.Task_REDUCE, "task_id", int32(task.id))
 			return &pb.Task{
 				Type:       pb.Task_REDUCE,
 				TaskId:     int32(task.id),
@@ -116,7 +116,7 @@ func (m *masterImpl) checkTimeouts(timeout time.Duration) {
 	now := time.Now()
 	for addr, last := range m.lastSeen {
 		if now.Sub(last) > timeout {
-			log.Printf("worker %s timed out, reclaiming tasks", addr)
+			slog.Warn("worker time out", "worker_addr", addr, "last_seen", last)
 			for i := range m.mapTasks {
 				if m.mapTasks[i].state == taskRunning && m.mapTasks[i].workerAddr == addr {
 					m.mapTasks[i].state = taskIdle

@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"io"
-	"log"
+	"log/slog"
 	pb "mapreduce/proto"
 	"net"
 	"sort"
@@ -50,6 +50,18 @@ func cleanup(dir string) {
 			os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
+}
+
+func setupLogger() {
+	var handler slog.Handler
+	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
+
+	if os.Getenv("LOG_FORMAT") == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	}
+	slog.SetDefault(slog.New(handler))
 }
 
 func reducePartition(partition int, mapResults []MapResult) []KeyValue {
@@ -199,7 +211,7 @@ func runMaster(inputFiles []string, min_workers int) {
 	check(e)
 	s := grpc.NewServer()
 	pb.RegisterMasterServer(s, impl)
-	log.Println("master listening on :50051")
+	slog.Info("master listening on :50051")
 
 	stopChecker := make(chan struct{})
 
@@ -221,9 +233,9 @@ func runMaster(inputFiles []string, min_workers int) {
 		// as smth can appear there only when all reduces are done
 		<-impl.done
 		close(stopChecker)
-		log.Println("all reduces are done, collecting results...")
+		slog.Info("all reduces are done")
 		collectResults(impl, dir)
-		log.Println("done, shutting fown...")
+		slog.Info("done")
 
 		impl.mtx.Lock()
 		impl.allDone = true
@@ -234,14 +246,16 @@ func runMaster(inputFiles []string, min_workers int) {
 	}()
 
 	if err := s.Serve(lis); err != nil {
-		log.Fatal(err)
+		slog.Error("fatal error", "err", err)
+		os.Exit(1)
 	}
 }
 
 func runWorker(m_addr, my_addr string) {
+	log := slog.With("worker_addr", my_addr, "master_addr", m_addr)
 	dir, e := os.Getwd()
 	check(e)
-	log.Printf("worker starting: addr=%s, master=%s", my_addr, m_addr)
+	log.Info("worker starting")
 
 	conn, err := grpc.NewClient(m_addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	check(err)
@@ -252,7 +266,7 @@ func runWorker(m_addr, my_addr string) {
 
 	_, err = master_client.RegisterWorker(ctx, &pb.WorkerInfo{Addr: my_addr})
 	check(err)
-	log.Printf("registered with master")
+	log.Info("registered worker")
 
 	go heartbeatLoop(ctx, master_client, my_addr)
 
@@ -261,16 +275,16 @@ func runWorker(m_addr, my_addr string) {
 	s := grpc.NewServer()
 	pb.RegisterWorkerServer(s, &workerImpl{dir: dir})
 	go s.Serve(lis)
-	log.Printf("worker gRPC server listening on %s", my_addr)
+	log.Info("worker gRPC server listening")
 
 	for {
 		task, err := master_client.RequestTask(ctx, &pb.TaskRequest{WorkerAddr: my_addr})
 		if err != nil {
-			log.Printf("RequestTask error: %v", err)
+			log.Error("RequestTask error", "err", err)
 			return
 		}
 		if task.Type != pb.Task_IDLE {
-			log.Printf("got task type=%v id=%d", task.Type, task.TaskId)
+			log.Info("task assigned", "type", task.Type, "id", task.TaskId)
 		}
 		switch task.Type {
 		case pb.Task_MAP:
@@ -292,12 +306,15 @@ func main() {
 	min_workers := flag.Int("min_workers", 1, "master waits for this many workers b4 starting")
 	flag.Parse()
 
+	setupLogger()
+
 	switch *mode {
 	case "master":
 		runMaster(flag.Args(), *min_workers)
 	case "worker":
 		runWorker(*master_addr, *my_addr)
 	default:
-		log.Fatalf("unknown mode: %s", *mode)
+		slog.Error("unknown mode", "mode", *mode)
+		os.Exit(1)
 	}
 }

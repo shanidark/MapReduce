@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"io"
-	"log"
+	"log/slog"
 	pb "mapreduce/proto"
 	"os"
 	"path/filepath"
@@ -88,8 +88,8 @@ func OpenMapTaskContext(taskID int, numPartitions uint64, dir string) WorkerCont
 
 func doMap(task *pb.Task, dir string, my_addr string,
 	mc pb.MasterClient, ctx context.Context) {
-	log.Printf("doMap starting for task %d", task.TaskId)
-	time.Sleep(20 * time.Second)
+	log := slog.With("worker_addr", my_addr, "task_id", task.TaskId, "phase", "map")
+	log.Info("doMap starting")
 	n := uint64(task.NumPartitions)
 	taskID := int(task.TaskId)
 
@@ -122,11 +122,14 @@ func doMap(task *pb.Task, dir string, my_addr string,
 		TaskId:     task.TaskId,
 	})
 	check(err)
+	log.Info("doMap finished")
 }
 
 // DO REDUCE
 func doReduce(task *pb.Task, dir string, my_addr string,
 	mc pb.MasterClient, ctx context.Context) {
+	log := slog.With("worker_addr", my_addr, "task_id", task.TaskId, "partition", task.Partition, "phase", "reduce")
+	log.Info("doReduce starting")
 	partition := int(task.Partition)
 	taskID := task.TaskId
 
@@ -161,6 +164,7 @@ func doReduce(task *pb.Task, dir string, my_addr string,
 		TaskId:     taskID,
 	})
 	check(err)
+	log.Info("doReduce finished")
 }
 
 func fetchSpillFromWorker(ctx context.Context, addr string, partition int, out *os.File) {
@@ -250,6 +254,7 @@ func (w *workerImpl) FetchResult(req *pb.FetchResultRequest,
 }
 
 func heartbeatLoop(ctx context.Context, mc pb.MasterClient, myAddr string) {
+	log := slog.With("worker_addr", myAddr)
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -259,7 +264,7 @@ func heartbeatLoop(ctx context.Context, mc pb.MasterClient, myAddr string) {
 		case <-ticker.C:
 			_, err := mc.Heartbeat(ctx, &pb.HeartbeatRequest{WorkerAddr: myAddr})
 			if err != nil {
-				log.Printf("heartbeat error: %v", err)
+				log.Warn("heartbeat failed", "err", err)
 			}
 		}
 	}
