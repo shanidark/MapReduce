@@ -1,0 +1,58 @@
+services:
+  master:
+    build: .
+    container_name: mr-master
+    command: ["--mode=master", "--min_workers=3", "/data/inp.dat"]
+    volumes:
+      - ./inp.dat:/data/inp.dat:ro
+      - ./output:/app
+    environment:
+      - LOG_FORMAT=json
+    working_dir: /app
+    ports:
+      - "50051:50051"
+
+  worker-1:
+    build: .
+    container_name: mr-worker-1
+    command: ["--mode=worker", "--addr=worker-1:50052", "--master_addr=master:50051"]
+    volumes:
+      - ./inp.dat:/data/inp.dat:ro
+      - worker-1-workdir:/app
+    environment:
+      - LOG_FORMAT=json
+    working_dir: /app
+    depends_on:
+      - master
+
+  worker-2:
+    build: .
+    container_name: mr-worker-2
+    command: ["--mode=worker", "--addr=worker-2:50052", "--master_addr=master:50051"]
+    volumes:
+      - ./inp.dat:/data/inp.dat:ro
+      - worker-2-workdir:/app
+    environment:
+      - LOG_FORMAT=json
+    working_dir: /app
+    depends_on:
+      - master
+
+  worker-3:
+    build: .
+    container_name: mr-worker-3
+    command: ["--mode=worker", "--addr=worker-3:50052", "--master_addr=master:50051"]
+    volumes:
+      - ./inp.dat:/data/inp.dat:ro
+      - worker-3-workdir:/app
+    environment:
+      - LOG_FORMAT=json
+    working_dir: /app
+    depends_on:
+      - master
+
+volumes:
+  master-workdir:
+  worker-1-workdir:
+  worker-2-workdir:
+  worker-3-workdir:
