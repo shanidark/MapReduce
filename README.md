@@ -15,6 +15,7 @@ Build and run 1 master instance + 3 workers on a shared network:
 ```bash
 docker compose up --build
 ```
+To better test fault-tolerance on not so big data env variables `SIMULATE_SLOW_MAP` & `SIMULATE_SLOW_REDUCE` can be used to slow down respective phases by N seconds.
 
 ## Usage
 Can be launched in 2 modes: `master` & `worker`. Files that are meant to be indexed must be on master machine.
@@ -24,7 +25,10 @@ To launch in master mode use `--mode=master`, also there is `--min_workers=n` (d
 ### Worker
 To launch in worker mode use `--mode=worker`, `--addr=` to set current worker machine address (with port) and `--master_addr=` to set which master machine to connect.
 
+## Testing
+Use `sudo go test -tags integration -v -timeout 10m` to run tests including fault-tolerance ones
+
 
 Logs are pretty informative, reporting that a worker has connected to the master and vice-versa, sending and requesting tasks and their statuses.
 
-Final results will be in the `index` file on master machine
+Final results will be in the `output/index` file on master machine

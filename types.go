@@ -56,6 +56,7 @@ type masterImpl struct {
 	mtx        sync.Mutex
 	workers    []string
 	minWorkers int
+	started    bool
 
 	mapTasks      []mapTask
 	reduceTasks   []reduceTask

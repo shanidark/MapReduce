@@ -90,6 +90,12 @@ func doMap(task *pb.Task, dir string, my_addr string,
 	mc pb.MasterClient, ctx context.Context) {
 	log := slog.With("worker_addr", my_addr, "task_id", task.TaskId, "phase", "map")
 	log.Info("doMap starting")
+
+	if s := os.Getenv("SIMULATE_SLOW_MAP"); s != "" {
+		d, _ := time.ParseDuration(s)
+		time.Sleep(d)
+	}
+
 	n := uint64(task.NumPartitions)
 	taskID := int(task.TaskId)
 
@@ -130,6 +136,12 @@ func doReduce(task *pb.Task, dir string, my_addr string,
 	mc pb.MasterClient, ctx context.Context) {
 	log := slog.With("worker_addr", my_addr, "task_id", task.TaskId, "partition", task.Partition, "phase", "reduce")
 	log.Info("doReduce starting")
+
+	if s := os.Getenv("SIMULATE_SLOW_REDUCE"); s != "" {
+		d, _ := time.ParseDuration(s)
+		time.Sleep(d)
+	}
+
 	partition := int(task.Partition)
 	taskID := task.TaskId
 

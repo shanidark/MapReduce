@@ -28,6 +28,8 @@ services:
       - worker-1-workdir:/workdir
     environment:
       - LOG_FORMAT=json
+      - SIMULATE_SLOW_MAP=8s
+      - SIMULATE_SLOW_REDUCE=5s
     working_dir: /workdir
     depends_on:
       - master
@@ -41,6 +43,8 @@ services:
       - worker-2-workdir:/workdir
     environment:
       - LOG_FORMAT=json
+      - SIMULATE_SLOW_MAP=8s
+      - SIMULATE_SLOW_REDUCE=5s
     working_dir: /workdir
     depends_on:
       - master
@@ -54,6 +58,8 @@ services:
       - worker-3-workdir:/workdir
     environment:
       - LOG_FORMAT=json
+      - SIMULATE_SLOW_MAP=8s
+      - SIMULATE_SLOW_REDUCE=5s
     working_dir: /workdir
     depends_on:
       - master

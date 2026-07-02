@@ -30,7 +30,12 @@ func (m *masterImpl) RequestTask(_ context.Context,
 	req *pb.TaskRequest) (*pb.Task, error) {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
-	if len(m.workers) < m.minWorkers {
+
+	if len(m.workers) >= m.minWorkers {
+		m.started = true
+	}
+
+	if !m.started {
 		return &pb.Task{Type: pb.Task_IDLE}, nil
 	}
 
@@ -59,6 +64,7 @@ func (m *masterImpl) RequestTask(_ context.Context,
 		task := &m.reduceTasks[i]
 		if task.state == taskIdle {
 			task.state = taskRunning
+			task.workerAddr = req.WorkerAddr
 			slog.Info("given task", "worker_addr", req.WorkerAddr, "task_type", pb.Task_REDUCE, "task_id", int32(task.id))
 			return &pb.Task{
 				Type:       pb.Task_REDUCE,
@@ -117,14 +123,25 @@ func (m *masterImpl) checkTimeouts(timeout time.Duration) {
 	for addr, last := range m.lastSeen {
 		if now.Sub(last) > timeout {
 			slog.Warn("worker time out", "worker_addr", addr, "last_seen", last)
+			// reclaim ALL tasks of the dead worker — both running and done.
+			// Done map spills / done reduce indexes live on the dead worker's
+			// disk and are no longer reachable, so we must re-execute.
 			for i := range m.mapTasks {
-				if m.mapTasks[i].state == taskRunning && m.mapTasks[i].workerAddr == addr {
-					m.mapTasks[i].state = taskIdle
+				task := &m.mapTasks[i]
+				if task.workerAddr == addr && task.state != taskIdle {
+					if task.state == taskDone {
+						m.mapDone--
+					}
+					task.state = taskIdle
 				}
 			}
 			for i := range m.reduceTasks {
-				if m.reduceTasks[i].state == taskRunning && m.reduceTasks[i].workerAddr == addr {
-					m.reduceTasks[i].state = taskIdle
+				task := &m.reduceTasks[i]
+				if task.workerAddr == addr && task.state != taskIdle {
+					if task.state == taskDone {
+						m.reduceDone--
+					}
+					task.state = taskIdle
 				}
 			}
 			delete(m.lastSeen, addr)
