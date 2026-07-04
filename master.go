@@ -22,6 +22,8 @@ func (m *masterImpl) RegisterWorker(_ context.Context,
 
 	m.workers = append(m.workers, info.Addr)
 	m.lastSeen[info.Addr] = time.Now()
+	workersRegistered.Set(float64(len(m.workers)))
+	workerUp.WithLabelValues(info.Addr).Set(1)
 	slog.Info("registered worker", "worker_addr", info.Addr, "total_workers", len(m.workers))
 	return &pb.Ack{}, nil
 }
@@ -46,6 +48,7 @@ func (m *masterImpl) RequestTask(_ context.Context,
 			task.state = taskRunning
 			task.workerAddr = req.WorkerAddr
 			slog.Info("given task", "worker_addr", req.WorkerAddr, "task_type", pb.Task_MAP, "task_id", int32(task.id))
+			tasksAssigned.WithLabelValues("map").Inc()
 			return &pb.Task{
 				Type:          pb.Task_MAP,
 				TaskId:        int32(task.id),
@@ -66,6 +69,7 @@ func (m *masterImpl) RequestTask(_ context.Context,
 			task.state = taskRunning
 			task.workerAddr = req.WorkerAddr
 			slog.Info("given task", "worker_addr", req.WorkerAddr, "task_type", pb.Task_REDUCE, "task_id", int32(task.id))
+			tasksAssigned.WithLabelValues("reduce").Inc()
 			return &pb.Task{
 				Type:       pb.Task_REDUCE,
 				TaskId:     int32(task.id),
@@ -90,6 +94,7 @@ func (m *masterImpl) ReportDone(_ context.Context,
 		if task.id == int(done.TaskId) && task.state == taskRunning {
 			task.state = taskDone
 			m.mapDone++
+			tasksCompleted.WithLabelValues("map").Inc()
 			return &pb.Ack{}, nil
 		}
 	}
@@ -102,6 +107,7 @@ func (m *masterImpl) ReportDone(_ context.Context,
 			if m.reduceDone == len(m.reduceTasks) {
 				close(m.done)
 			}
+			tasksCompleted.WithLabelValues("reduce").Inc()
 			return &pb.Ack{}, nil
 		}
 	}
@@ -123,9 +129,9 @@ func (m *masterImpl) checkTimeouts(timeout time.Duration) {
 	for addr, last := range m.lastSeen {
 		if now.Sub(last) > timeout {
 			slog.Warn("worker time out", "worker_addr", addr, "last_seen", last)
-			// reclaim ALL tasks of the dead worker — both running and done.
-			// Done map spills / done reduce indexes live on the dead worker's
-			// disk and are no longer reachable, so we must re-execute.
+			workersTimedOut.Inc()
+			workerUp.WithLabelValues(addr).Set(0)
+			// reclaiming all tasks from dead worker
 			for i := range m.mapTasks {
 				task := &m.mapTasks[i]
 				if task.workerAddr == addr && task.state != taskIdle {
@@ -133,6 +139,7 @@ func (m *masterImpl) checkTimeouts(timeout time.Duration) {
 						m.mapDone--
 					}
 					task.state = taskIdle
+					tasksReclaimed.WithLabelValues("map").Inc()
 				}
 			}
 			for i := range m.reduceTasks {
@@ -142,6 +149,7 @@ func (m *masterImpl) checkTimeouts(timeout time.Duration) {
 						m.reduceDone--
 					}
 					task.state = taskIdle
+					tasksReclaimed.WithLabelValues("reduce").Inc()
 				}
 			}
 			delete(m.lastSeen, addr)
@@ -151,6 +159,7 @@ func (m *masterImpl) checkTimeouts(timeout time.Duration) {
 					break
 				}
 			}
+			workersRegistered.Set(float64(len(m.workers)))
 		}
 	}
 }

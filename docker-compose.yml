@@ -18,6 +18,7 @@ services:
     working_dir: /workdir
     ports:
       - "50051:50051"
+      - "9090:9090"
 
   worker-1:
     build: .
@@ -31,6 +32,8 @@ services:
     working_dir: /workdir
     depends_on:
       - master
+    ports:
+      - "9092:9090"
 
   worker-2:
     build: .
@@ -44,6 +47,8 @@ services:
     working_dir: /workdir
     depends_on:
       - master
+    ports:
+      - "9093:9090"
 
   worker-3:
     build: .
@@ -57,6 +62,28 @@ services:
     working_dir: /workdir
     depends_on:
       - master
+    ports:
+      - "9094:9090"
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mr-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9091:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mr-grafana
+    volumes:
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    ports:
+      - "3000:3000"
 
 volumes:
   worker-1-workdir:

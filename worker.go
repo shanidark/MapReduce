@@ -88,6 +88,8 @@ func OpenMapTaskContext(taskID int, numPartitions uint64, dir string) WorkerCont
 
 func doMap(task *pb.Task, dir string, my_addr string,
 	mc pb.MasterClient, ctx context.Context) {
+	start := time.Now()
+	defer func() { taskDuration.WithLabelValues("map").Observe(time.Since(start).Seconds()) }()
 	log := slog.With("worker_addr", my_addr, "task_id", task.TaskId, "phase", "map")
 	log.Info("doMap starting")
 
@@ -134,6 +136,8 @@ func doMap(task *pb.Task, dir string, my_addr string,
 // DO REDUCE
 func doReduce(task *pb.Task, dir string, my_addr string,
 	mc pb.MasterClient, ctx context.Context) {
+	start := time.Now()
+	defer func() { taskDuration.WithLabelValues("reduce").Observe(time.Since(start).Seconds()) }()
 	log := slog.With("worker_addr", my_addr, "task_id", task.TaskId, "partition", task.Partition, "phase", "reduce")
 	log.Info("doReduce starting")
 
@@ -277,6 +281,7 @@ func heartbeatLoop(ctx context.Context, mc pb.MasterClient, myAddr string) {
 			_, err := mc.Heartbeat(ctx, &pb.HeartbeatRequest{WorkerAddr: myAddr})
 			if err != nil {
 				log.Warn("heartbeat failed", "err", err)
+				heartbeatsFailed.Inc()
 			}
 		}
 	}

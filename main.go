@@ -181,7 +181,9 @@ func collectResults(impl *masterImpl, dir string) {
 }
 
 // connection setups
-func runMaster(inputFiles []string, min_workers int) {
+func runMaster(inputFiles []string, min_workers int, metrics_addr string) {
+	go serveMetrics(metrics_addr)
+
 	dir, e := os.Getwd()
 	check(e)
 	cleanup(dir)
@@ -251,7 +253,8 @@ func runMaster(inputFiles []string, min_workers int) {
 	}
 }
 
-func runWorker(m_addr, my_addr string) {
+func runWorker(m_addr, my_addr, metrics_addr string) {
+	go serveMetrics(metrics_addr)
 	log := slog.With("worker_addr", my_addr, "master_addr", m_addr)
 	dir, e := os.Getwd()
 	check(e)
@@ -304,15 +307,16 @@ func main() {
 	my_addr := flag.String("addr", ":50052", "this worker's listen address")
 	master_addr := flag.String("master_addr", ":50051", "master address")
 	min_workers := flag.Int("min_workers", 1, "master waits for this many workers b4 starting")
+	metrics_addr := flag.String("metrics_addr", ":9090", "prometheus metrics endpoint access")
 	flag.Parse()
 
 	setupLogger()
 
 	switch *mode {
 	case "master":
-		runMaster(flag.Args(), *min_workers)
+		runMaster(flag.Args(), *min_workers, *metrics_addr)
 	case "worker":
-		runWorker(*master_addr, *my_addr)
+		runWorker(*master_addr, *my_addr, *metrics_addr)
 	default:
 		slog.Error("unknown mode", "mode", *mode)
 		os.Exit(1)

@@ -9,6 +9,15 @@ Builds simply with `go build`.
 ## Features
  * Heartbeats & re-execution
  * Structured logging with slog
+ * Grafana and Prometheus metrics logging. Built-in metrics are:
+    * Currently registered workers
+    * Currently alive workers
+    * Total amount of workers that've missed heartbeats
+    * Total amount of assigned tasks
+    * Total amount of done tasks
+    * Total amount of reclaimed tasks (after a worker had missed its heartbeat)
+    * Task completion duration
+    * Total number of failed heartbeats (error returned)
 
 ## Running with Docker Compose
 Build and run 1 master instance + 3 workers on a shared network:
