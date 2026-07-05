@@ -17,13 +17,12 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-type workerImpl struct {
-	pb.UnimplementedWorkerServer
-	dir string
-}
-
-func hasSpillPartition(name string, partition int) bool {
+func hasSpillPartition(name string, jobID int32, partition int) bool {
 	if !strings.HasPrefix(name, spillFilePrefix) {
+		return false
+	}
+	prefix := spillFilePrefix + strconv.FormatInt(int64(jobID), 10) + "-"
+	if !strings.HasPrefix(name, prefix) {
 		return false
 	}
 	suffix := "-" + strconv.Itoa(partition)
@@ -36,7 +35,7 @@ func (w *workerImpl) FetchSpill(req *pb.FetchSpillRequest,
 	check(err)
 	buf := make([]byte, 64*1024)
 	for _, entry := range entries {
-		if !hasSpillPartition(entry.Name(), int(req.Partition)) {
+		if !hasSpillPartition(entry.Name(), req.JobId, int(req.Partition)) {
 			continue
 		}
 		file, err := os.Open(filepath.Join(w.dir, entry.Name()))
@@ -64,14 +63,13 @@ func (w *workerImpl) FetchSpill(req *pb.FetchSpillRequest,
 
 }
 
-// DO MAP
-func OpenMapTaskContext(taskID int, numPartitions uint64, dir string) WorkerContext {
+func OpenMapTaskContext(jobID int32, taskID int, numPartitions uint64, dir string) WorkerContext {
 	files := make([]*os.File, numPartitions)
 	writers := make([]*bufio.Writer, numPartitions)
 	partitionFiles := make(map[int]string, numPartitions)
 
 	for i := range numPartitions {
-		name := spillFilePrefix + strconv.Itoa(taskID) + "-" + strconv.FormatUint(i, 10)
+		name := spillFilePrefix + strconv.FormatInt(int64(jobID), 10) + "-" + strconv.Itoa(taskID) + "-" + strconv.FormatUint(i, 10)
 		path := filepath.Join(dir, name)
 		f, e := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		check(e)
@@ -86,11 +84,11 @@ func OpenMapTaskContext(taskID int, numPartitions uint64, dir string) WorkerCont
 	}
 }
 
-func doMap(task *pb.Task, dir string, my_addr string,
+func doMap(task *pb.Task, dir string, myAddr string,
 	mc pb.MasterClient, ctx context.Context) {
 	start := time.Now()
 	defer func() { taskDuration.WithLabelValues("map").Observe(time.Since(start).Seconds()) }()
-	log := slog.With("worker_addr", my_addr, "task_id", task.TaskId, "phase", "map")
+	log := slog.With("worker_addr", myAddr, "task_id", task.TaskId, "job_id", task.JobId, "phase", "map")
 	log.Info("doMap starting")
 
 	if s := os.Getenv("SIMULATE_SLOW_MAP"); s != "" {
@@ -101,23 +99,31 @@ func doMap(task *pb.Task, dir string, my_addr string,
 	n := uint64(task.NumPartitions)
 	taskID := int(task.TaskId)
 
-	wc := OpenMapTaskContext(taskID, n, dir)
+	wc := OpenMapTaskContext(task.JobId, taskID, n, dir)
 	defer wc.Close()
 
 	file, err := os.Open(task.FilePath)
-	check(err)
+	if err != nil {
+		log.Error("cannot open input file", "err", err)
+		_, reportErr := mc.ReportDone(ctx, &pb.TaskDone{
+			WorkerAddr:   myAddr,
+			TaskId:       task.TaskId,
+			JobId:        task.JobId,
+			Failed:       true,
+			ErrorMessage: err.Error(),
+		})
+		if reportErr != nil {
+			log.Error("failed to report task failure", "err", reportErr)
+		}
+		return
+	}
 	defer file.Close()
 
 	buf := make([]byte, ChunkSize)
 	for {
 		n, err := file.Read(buf)
 		if n > 0 {
-			chunk := Chunk{
-				FileID:  taskID,
-				ChunkID: 0,
-				Data:    buf[:n],
-			}
-			Map(chunk, &wc)
+			Map(Chunk{FileID: taskID, Data: buf[:n]}, &wc)
 		}
 		if err == io.EOF {
 			break
@@ -126,19 +132,19 @@ func doMap(task *pb.Task, dir string, my_addr string,
 	}
 
 	_, err = mc.ReportDone(ctx, &pb.TaskDone{
-		WorkerAddr: my_addr,
+		WorkerAddr: myAddr,
 		TaskId:     task.TaskId,
+		JobId:      task.JobId,
 	})
 	check(err)
 	log.Info("doMap finished")
 }
 
-// DO REDUCE
-func doReduce(task *pb.Task, dir string, my_addr string,
+func doReduce(task *pb.Task, dir string, myAddr string,
 	mc pb.MasterClient, ctx context.Context) {
 	start := time.Now()
 	defer func() { taskDuration.WithLabelValues("reduce").Observe(time.Since(start).Seconds()) }()
-	log := slog.With("worker_addr", my_addr, "task_id", task.TaskId, "partition", task.Partition, "phase", "reduce")
+	log := slog.With("worker_addr", myAddr, "task_id", task.TaskId, "job_id", task.JobId, "partition", task.Partition, "phase", "reduce")
 	log.Info("doReduce starting")
 
 	if s := os.Getenv("SIMULATE_SLOW_REDUCE"); s != "" {
@@ -148,14 +154,15 @@ func doReduce(task *pb.Task, dir string, my_addr string,
 
 	partition := int(task.Partition)
 	taskID := task.TaskId
+	jobID := task.JobId
 
 	// downloading spill-files
-	mergedPath := filepath.Join(dir, "reduce-merged-"+strconv.Itoa(partition))
+	mergedPath := filepath.Join(dir, "reduce-merged-"+strconv.FormatInt(int64(jobID), 10)+"-"+strconv.Itoa(partition))
 	merged, err := os.Create(mergedPath)
 	check(err)
 
 	for _, addr := range task.SpillAddrs {
-		fetchSpillFromWorker(ctx, addr, partition, merged)
+		fetchSpillFromWorker(ctx, addr, partition, jobID, merged)
 	}
 	merged.Close()
 
@@ -163,33 +170,34 @@ func doReduce(task *pb.Task, dir string, my_addr string,
 	kvs := reducePartitionFromFile(mergedPath)
 
 	// making index part
-	resultPath := filepath.Join(dir, "index-"+strconv.Itoa(partition))
+	resultPath := filepath.Join(dir, "index-"+strconv.FormatInt(int64(jobID), 10)+"-"+strconv.Itoa(partition))
 	f, err := os.Create(resultPath)
 	check(err)
 	w := bufio.NewWriter(f)
 	for _, kv := range kvs {
 		w.WriteString(kv.key + " -> " + kv.value + "\n")
 	}
-	ensure(w.Flush())
+	check(w.Flush())
 	f.Close()
 
 	os.Remove(mergedPath)
 
 	_, err = mc.ReportDone(ctx, &pb.TaskDone{
-		WorkerAddr: my_addr,
+		WorkerAddr: myAddr,
 		TaskId:     taskID,
+		JobId:      jobID,
 	})
 	check(err)
 	log.Info("doReduce finished")
 }
 
-func fetchSpillFromWorker(ctx context.Context, addr string, partition int, out *os.File) {
+func fetchSpillFromWorker(ctx context.Context, addr string, partition int, jobID int32, out *os.File) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	check(err)
 	defer conn.Close()
 
 	wc := pb.NewWorkerClient(conn)
-	stream, err := wc.FetchSpill(ctx, &pb.FetchSpillRequest{Partition: int32(partition)})
+	stream, err := wc.FetchSpill(ctx, &pb.FetchSpillRequest{Partition: int32(partition), JobId: jobID})
 	check(err)
 
 	for {
@@ -236,11 +244,9 @@ func reducePartitionFromFile(path string) []KeyValue {
 	return kvs
 }
 
-// Fetching via gRPC
-// This method is called from master through gRPC
 func (w *workerImpl) FetchResult(req *pb.FetchResultRequest,
 	stream pb.Worker_FetchResultServer) error {
-	name := "index-" + strconv.Itoa(int(req.Partition))
+	name := "index-" + strconv.FormatInt(int64(req.JobId), 10) + "-" + strconv.Itoa(int(req.Partition))
 	path := filepath.Join(w.dir, name)
 
 	file, err := os.Open(path)

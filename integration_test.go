@@ -41,7 +41,7 @@ func resetOutput(t *testing.T) {
 // readIndex returns the map word -> list of doc IDs from ./output/index.
 func readIndex(t *testing.T) map[string]string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("output", "index"))
+	data, err := os.ReadFile(filepath.Join("output", "index-0"))
 	if err != nil {
 		t.Fatalf("cannot read output/index: %v", err)
 	}
@@ -111,7 +111,8 @@ func TestIntegration_HappyPath(t *testing.T) {
 	t.Cleanup(func() { cleanupCluster(t, composeFile) })
 
 	resetOutput(t)
-	runCompose(t, composeFile, "up", "--build", "--abort-on-container-exit")
+	runCompose(t, composeFile, "up", "--build", "-d")
+	waitForClient(t, 90*time.Second)
 	time.Sleep(500 * time.Millisecond)
 
 	verifyExpectedIndex(t, readIndex(t))
@@ -129,10 +130,10 @@ func killContainer(t *testing.T, name string) {
 	t.Logf("killed %s", name)
 }
 
-// waitForMaster blocks until mr-master exits, or fails the test on timeout.
-func waitForMaster(t *testing.T, timeout time.Duration) {
+// waitForClient blocks until mr-master exits, or fails the test on timeout.
+func waitForClient(t *testing.T, timeout time.Duration) {
 	t.Helper()
-	cmd := exec.Command("docker", "wait", "mr-master")
+	cmd := exec.Command("docker", "wait", "mr-client")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	done := make(chan error, 1)
@@ -140,10 +141,10 @@ func waitForMaster(t *testing.T, timeout time.Duration) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("docker wait mr-master failed: %v", err)
+			t.Fatalf("docker wait mr-client failed: %v", err)
 		}
 	case <-time.After(timeout):
-		t.Fatalf("master did not finish within %s", timeout)
+		t.Fatalf("client did not finish within %s", timeout)
 	}
 }
 
@@ -160,7 +161,7 @@ func TestIntegration_KillDuringMap(t *testing.T) {
 
 	killContainer(t, "mr-worker-2")
 
-	waitForMaster(t, 90*time.Second)
+	waitForClient(t, 90*time.Second)
 	time.Sleep(500 * time.Millisecond)
 
 	verifyExpectedIndex(t, readIndex(t))
@@ -181,7 +182,7 @@ func TestIntegration_KillDuringReduce(t *testing.T) {
 
 	killContainer(t, "mr-worker-2")
 
-	waitForMaster(t, 90*time.Second)
+	waitForClient(t, 90*time.Second)
 	time.Sleep(500 * time.Millisecond)
 
 	verifyExpectedIndex(t, readIndex(t))
@@ -202,7 +203,7 @@ func TestIntegration_KillTwoWorkers(t *testing.T) {
 	killContainer(t, "mr-worker-3")
 
 	// one worker remaining — needs longer timeout
-	waitForMaster(t, 120*time.Second)
+	waitForClient(t, 120*time.Second)
 	time.Sleep(500 * time.Millisecond)
 
 	verifyExpectedIndex(t, readIndex(t))

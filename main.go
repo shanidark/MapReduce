@@ -2,37 +2,25 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"io"
 	"log/slog"
 	pb "mapreduce/proto"
 	"net"
-	"sort"
-	"sync"
-	"time"
-
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-
-	// "fmt"
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 var NUM_WORKERS int64 = int64(runtime.NumCPU())
-var JOBS_Q_SIZE int64 = NUM_WORKERS * 2
-var RESULTS_Q_SIZE int64 = NUM_WORKERS
 
 func check(e error) {
-	if e != nil {
-		panic(e)
-	}
-}
-
-func ensure(e error) {
 	if e != nil {
 		panic(e)
 	}
@@ -64,83 +52,13 @@ func setupLogger() {
 	slog.SetDefault(slog.New(handler))
 }
 
-func reducePartition(partition int, mapResults []MapResult) []KeyValue {
-	index := make(map[string][]string)
-	for _, result := range mapResults {
-		path, ok := result.PartitionFiles[partition]
-		if !ok {
-			continue
-		}
-		file, e := os.Open(path)
-		check(e)
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if line == "" {
-				continue
-			}
-			word, doc, ok := strings.Cut(line, " -> ")
-			if !ok || word == "" || doc == "" {
-				continue
-			}
-			index[word] = append(index[word], doc)
-		}
-		file.Close()
-		check(scanner.Err())
-	}
-
-	keys := make([]string, 0, len(index))
-	for key := range index {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	kvs := make([]KeyValue, 0, len(keys))
-	for _, key := range keys {
-		kvs = append(kvs, Reduce(key, index[key]))
-	}
-	return kvs
-}
-
-func GroupShuffle(mapResults []MapResult, numWorkers int64, dir string) {
-	ch := make(chan partitionResult, numWorkers)
-	var wg sync.WaitGroup
-	for p := range int(numWorkers) {
-		wg.Add(1)
-		go func(p int) {
-			defer wg.Done()
-			ch <- partitionResult{partition: p, kvs: reducePartition(p, mapResults)}
-		}(p)
-	}
-	go func() {
-		wg.Wait()
-		close(ch)
-	}()
-
-	ordered := make([][]KeyValue, numWorkers)
-	for r := range ch {
-		ordered[r.partition] = r.kvs
-	}
-
-	f, e := os.Create(filepath.Join(dir, "index"))
-	check(e)
-	defer f.Close()
-	w := bufio.NewWriter(f)
-	for _, kvs := range ordered {
-		for _, kv := range kvs {
-			w.WriteString(kv.key + "->" + kv.value + "\n")
-		}
-	}
-	check(w.Flush())
-}
-
-func fetchResultFromWorker(ctx context.Context, addr string, partition int, w *bufio.Writer) {
+func fetchResultFromWorkerForJob(ctx context.Context, addr string, partition int, jobID int32, w *bufio.Writer) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	check(err)
 	defer conn.Close()
 
 	wc := pb.NewWorkerClient(conn)
-	stream, err := wc.FetchResult(ctx, &pb.FetchResultRequest{Partition: int32(partition)})
+	stream, err := wc.FetchResult(ctx, &pb.FetchResultRequest{Partition: int32(partition), JobId: jobID})
 	check(err)
 
 	for {
@@ -155,58 +73,55 @@ func fetchResultFromWorker(ctx context.Context, addr string, partition int, w *b
 
 }
 
-func collectResults(impl *masterImpl, dir string) {
-	impl.mtx.Lock()
-	addrs := make([]string, len(impl.reduceTasks))
-	for i, t := range impl.reduceTasks {
-		addrs[i] = t.workerAddr
+func runClient(masterAddr string, files []string) {
+	if len(files) == 0 {
+		slog.Error("no files provided to client")
+		os.Exit(1)
 	}
-	impl.mtx.Unlock()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	conn, err := grpc.NewClient(masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	check(err)
+	defer conn.Close()
+	mc := pb.NewMasterClient(conn)
 
-	f, e := os.Create(filepath.Join(dir, "index"))
-	check(e)
-	defer f.Close()
-	w := bufio.NewWriter(f)
-	defer w.Flush()
+	ctx := context.Background()
 
-	for partition, addr := range addrs {
-		if addr == "" {
+	resp, err := mc.SubmitJob(ctx, &pb.SubmitJobRequest{FilePaths: files})
+	check(err)
+	jobID := resp.JobId
+	slog.Info("job submitted", "job_id", jobID)
+
+	for {
+		time.Sleep(2 * time.Second)
+		status, err := mc.GetJobStatus(ctx, &pb.GetJobStatusRequest{JobId: jobID})
+		if err != nil {
+			slog.Warn("GetJobStatus failed", "err", err)
 			continue
 		}
-		fetchResultFromWorker(ctx, addr, partition, w)
+		if status.Status == pb.GetJobStatusResponse_DONE {
+			slog.Info("job done", "job_id", jobID, "index_path", status.IndexPath)
+			return
+		}
+		if status.Status == pb.GetJobStatusResponse_FAILED {
+			slog.Error("job failed", "job_id", jobID, "error", status.ErrorMessage)
+			os.Exit(1)
+		}
+		slog.Info("job still running", "job_id", jobID)
 	}
 }
 
-// connection setups
-func runMaster(inputFiles []string, min_workers int, metrics_addr string) {
-	go serveMetrics(metrics_addr)
+func runMaster(minWorkers int, metricsAddr string) {
+	go serveMetrics(metricsAddr)
 
 	dir, e := os.Getwd()
 	check(e)
 	cleanup(dir)
 
-	numPartitions := int(NUM_WORKERS)
-
-	mapTasks := make([]mapTask, len(inputFiles))
-	for i, path := range inputFiles {
-		mapTasks[i] = mapTask{id: i, filePath: path, state: taskIdle}
-	}
-
-	reduceTasks := make([]reduceTask, numPartitions)
-	for i := range numPartitions {
-		reduceTasks[i] = reduceTask{id: len(mapTasks) + i, partition: i, state: taskIdle}
-	}
-
 	impl := &masterImpl{
-		mapTasks:      mapTasks,
-		reduceTasks:   reduceTasks,
-		numPartitions: numPartitions,
-		minWorkers:    min_workers,
-		done:          make(chan struct{}),
-		lastSeen:      make(map[string]time.Time),
+		minWorkers: minWorkers,
+		lastSeen:   make(map[string]time.Time),
+		jobs:       make(map[int32]*job),
+		dir:        dir,
 	}
 
 	lis, e := net.Listen("tcp", ":50051")
@@ -215,36 +130,12 @@ func runMaster(inputFiles []string, min_workers int, metrics_addr string) {
 	pb.RegisterMasterServer(s, impl)
 	slog.Info("master listening on :50051")
 
-	stopChecker := make(chan struct{})
-
 	go func() {
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-stopChecker:
-				return
-			case <-ticker.C:
-				impl.checkTimeouts(5 * time.Second)
-			}
+		for range ticker.C {
+			impl.checkTimeouts(5 * time.Second)
 		}
-	}()
-
-	go func() {
-		// waiting till anything appears in impl.done channel,
-		// as smth can appear there only when all reduces are done
-		<-impl.done
-		close(stopChecker)
-		slog.Info("all reduces are done")
-		collectResults(impl, dir)
-		slog.Info("done")
-
-		impl.mtx.Lock()
-		impl.allDone = true
-		impl.mtx.Unlock()
-
-		time.Sleep(1 * time.Second)
-		s.GracefulStop()
 	}()
 
 	if err := s.Serve(lis); err != nil {
@@ -253,27 +144,27 @@ func runMaster(inputFiles []string, min_workers int, metrics_addr string) {
 	}
 }
 
-func runWorker(m_addr, my_addr, metrics_addr string) {
-	go serveMetrics(metrics_addr)
-	log := slog.With("worker_addr", my_addr, "master_addr", m_addr)
+func runWorker(mAddr, myAddr, metricsAddr string) {
+	go serveMetrics(metricsAddr)
+	log := slog.With("worker_addr", myAddr, "masterAddr", mAddr)
 	dir, e := os.Getwd()
 	check(e)
 	log.Info("worker starting")
 
-	conn, err := grpc.NewClient(m_addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(mAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	check(err)
-	master_client := pb.NewMasterClient(conn)
+	masterClient := pb.NewMasterClient(conn)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	_, err = master_client.RegisterWorker(ctx, &pb.WorkerInfo{Addr: my_addr})
+	_, err = masterClient.RegisterWorker(ctx, &pb.WorkerInfo{Addr: myAddr})
 	check(err)
 	log.Info("registered worker")
 
-	go heartbeatLoop(ctx, master_client, my_addr)
+	go heartbeatLoop(ctx, masterClient, myAddr)
 
-	lis, err := net.Listen("tcp", my_addr)
+	lis, err := net.Listen("tcp", myAddr)
 	check(err)
 	s := grpc.NewServer()
 	pb.RegisterWorkerServer(s, &workerImpl{dir: dir})
@@ -281,7 +172,7 @@ func runWorker(m_addr, my_addr, metrics_addr string) {
 	log.Info("worker gRPC server listening")
 
 	for {
-		task, err := master_client.RequestTask(ctx, &pb.TaskRequest{WorkerAddr: my_addr})
+		task, err := masterClient.RequestTask(ctx, &pb.TaskRequest{WorkerAddr: myAddr})
 		if err != nil {
 			log.Error("RequestTask error", "err", err)
 			return
@@ -291,9 +182,9 @@ func runWorker(m_addr, my_addr, metrics_addr string) {
 		}
 		switch task.Type {
 		case pb.Task_MAP:
-			doMap(task, dir, my_addr, master_client, ctx)
+			doMap(task, dir, myAddr, masterClient, ctx)
 		case pb.Task_REDUCE:
-			doReduce(task, dir, my_addr, master_client, ctx)
+			doReduce(task, dir, myAddr, masterClient, ctx)
 		case pb.Task_SHUTDOWN:
 			return
 		case pb.Task_IDLE:
@@ -302,21 +193,34 @@ func runWorker(m_addr, my_addr, metrics_addr string) {
 	}
 }
 
+func init() {
+	tasksAssigned.WithLabelValues("map").Add(0)
+	tasksAssigned.WithLabelValues("reduce").Add(0)
+	tasksCompleted.WithLabelValues("map").Add(0)
+	tasksCompleted.WithLabelValues("reduce").Add(0)
+	tasksReclaimed.WithLabelValues("map").Add(0)
+	tasksReclaimed.WithLabelValues("reduce").Add(0)
+	taskDuration.WithLabelValues("map").Observe(0)
+	taskDuration.WithLabelValues("reduce").Observe(0)
+}
+
 func main() {
-	mode := flag.String("mode", "worker", "master|worker")
-	my_addr := flag.String("addr", ":50052", "this worker's listen address")
-	master_addr := flag.String("master_addr", ":50051", "master address")
-	min_workers := flag.Int("min_workers", 1, "master waits for this many workers b4 starting")
-	metrics_addr := flag.String("metrics_addr", ":9090", "prometheus metrics endpoint access")
+	mode := flag.String("mode", "worker", "master|worker|client")
+	myAddr := flag.String("addr", ":50052", "this worker's listen address")
+	masterAddr := flag.String("master_addr", ":50051", "master address")
+	minWorkers := flag.Int("min_workers", 1, "master waits for this many workers b4 starting")
+	metricsAddr := flag.String("metrics_addr", ":9090", "prometheus metrics endpoint access")
 	flag.Parse()
 
 	setupLogger()
 
 	switch *mode {
 	case "master":
-		runMaster(flag.Args(), *min_workers, *metrics_addr)
+		runMaster(*minWorkers, *metricsAddr)
+	case "client":
+		runClient(*masterAddr, flag.Args())
 	case "worker":
-		runWorker(*master_addr, *my_addr, *metrics_addr)
+		runWorker(*masterAddr, *myAddr, *metricsAddr)
 	default:
 		slog.Error("unknown mode", "mode", *mode)
 		os.Exit(1)

@@ -5,13 +5,8 @@ services:
     command:
       - "--mode=master"
       - "--min_workers=3"
-      - "/data/doc1.txt"
-      - "/data/doc2.txt"
-      - "/data/doc3.txt"
-      - "/data/doc4.txt"
-      - "/data/doc5.txt"
     volumes:
-      - ./test-inputs:/data:ro
+      - ./input:/data:ro
       - ./output:/workdir
     environment:
       - LOG_FORMAT=json
@@ -25,7 +20,7 @@ services:
     container_name: mr-worker-1
     command: ["--mode=worker", "--addr=worker-1:50052", "--master_addr=master:50051"]
     volumes:
-      - ./test-inputs:/data:ro
+      - ./input:/data:ro
       - worker-1-workdir:/workdir
     environment:
       - LOG_FORMAT=json
@@ -34,13 +29,14 @@ services:
       - master
     ports:
       - "9092:9090"
+    restart: on-failure
 
   worker-2:
     build: .
     container_name: mr-worker-2
     command: ["--mode=worker", "--addr=worker-2:50052", "--master_addr=master:50051"]
     volumes:
-      - ./test-inputs:/data:ro
+      - ./input:/data:ro
       - worker-2-workdir:/workdir
     environment:
       - LOG_FORMAT=json
@@ -49,13 +45,14 @@ services:
       - master
     ports:
       - "9093:9090"
+    restart: on-failure
 
   worker-3:
     build: .
     container_name: mr-worker-3
     command: ["--mode=worker", "--addr=worker-3:50052", "--master_addr=master:50051"]
     volumes:
-      - ./test-inputs:/data:ro
+      - ./input:/data:ro
       - worker-3-workdir:/workdir
     environment:
       - LOG_FORMAT=json
@@ -64,6 +61,17 @@ services:
       - master
     ports:
       - "9094:9090"
+    restart: on-failure
+
+  client:
+    build: .
+    profiles: ["manual"]
+    volumes:
+      - ./input:/data:ro
+    environment:
+      - LOG_FORMAT=json
+    depends_on:
+      - master
 
   prometheus:
     image: prom/prometheus:latest

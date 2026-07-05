@@ -6,6 +6,8 @@ service Master {
     rpc RequestTask(TaskRequest) returns (Task);
     rpc ReportDone(TaskDone) returns (Ack);
     rpc Heartbeat(HeartbeatRequest) returns (Ack);
+    rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+    rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
 }
 
 service Worker {
@@ -21,24 +23,30 @@ message Task {
     enum Type { IDLE = 0; MAP = 1; REDUCE = 2; SHUTDOWN = 3; }
     Type type = 1;
     int32 task_id = 2;
-    string file_path = 3;    // map: путь к фалу
-    int32 partition = 4;     // reduce: номер партиции
-    repeated string spill_addrs = 5; // reduce: адреса воркеров с нужными файлами
+    string file_path = 3;
+    int32 partition = 4;
+    repeated string spill_addrs = 5;
     int32 num_partitions = 6;
+    int32 job_id = 7;
 }
 
 message TaskDone {
     string worker_addr = 1;
     int32 task_id = 2;
-    int32 num_created_partitions = 3; // map : сколько партиций создалось
+    int32 num_created_partitions = 3;
+    int32 job_id = 4;
+    bool failed = 5;
+    string error_message = 6;
 }
 
 message FetchSpillRequest {
     int32 partition = 2;
+    int32 job_id = 3;
 }
 
 message FetchResultRequest {
     int32 partition = 1;
+    int32 job_id = 2;
 }
 
 message HeartbeatRequest {
@@ -47,4 +55,28 @@ message HeartbeatRequest {
 
 message SpillChunk {
     bytes data = 1;
+}
+
+message SubmitJobRequest {
+    repeated string file_paths = 1;
+}
+
+message SubmitJobResponse {
+    int32 job_id = 1;
+}
+
+message GetJobStatusRequest {
+    int32 job_id = 1;
+}
+
+message GetJobStatusResponse {
+    enum Status {
+        UNKNOWN = 0;
+        RUNNING = 1;
+        DONE = 2;
+        FAILED = 3;
+    }
+    Status status = 1;
+    string index_path = 2;  // set when status = DONE
+    string error_message =3;
 }

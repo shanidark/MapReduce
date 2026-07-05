@@ -9,21 +9,8 @@ import (
 )
 
 type Chunk struct {
-	FileID      int
-	ChunkID     int
-	StartOffset int64
-	Data        []byte
-}
-
-type SpillFile struct {
-	Partition int
-	Path      string
-}
-
-type MapResult struct {
-	FileID         int
-	ChunkID        int
-	PartitionFiles map[int]string
+	FileID int
+	Data   []byte
 }
 
 type KeyValue struct {
@@ -37,18 +24,37 @@ type WorkerContext struct {
 	PartitionFiles map[int]string
 }
 
-type partitionResult struct {
-	partition int
-	kvs       []KeyValue
-}
-
 type taskState int
 
 const (
 	taskIdle taskState = iota
 	taskRunning
 	taskDone
+	taskFailed
 )
+
+type jobStatus int
+
+const (
+	jobRunning jobStatus = iota
+	jobCollecting
+	jobDone
+	jobFailed
+)
+
+type job struct {
+	id            int32
+	files         []string
+	numPartitions int
+
+	mapTasks    []mapTask
+	reduceTasks []reduceTask
+	mapDone     int
+	reduceDone  int
+
+	status    jobStatus
+	indexPath string
+}
 
 type masterImpl struct {
 	pb.UnimplementedMasterServer
@@ -58,16 +64,12 @@ type masterImpl struct {
 	minWorkers int
 	started    bool
 
-	mapTasks      []mapTask
-	reduceTasks   []reduceTask
-	mapDone       int
-	reduceDone    int
-	numPartitions int
-
 	lastSeen map[string]time.Time
 
-	allDone bool
-	done    chan struct{}
+	nextJobID int32
+	jobs      map[int32]*job
+
+	dir string
 }
 
 type mapTask struct {
@@ -75,6 +77,7 @@ type mapTask struct {
 	filePath   string
 	state      taskState
 	workerAddr string
+	attempts   int
 }
 
 type reduceTask struct {
@@ -82,4 +85,10 @@ type reduceTask struct {
 	partition  int
 	state      taskState
 	workerAddr string
+	attempts   int
+}
+
+type workerImpl struct {
+	pb.UnimplementedWorkerServer
+	dir string
 }

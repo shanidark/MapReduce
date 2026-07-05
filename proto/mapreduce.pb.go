@@ -73,6 +73,58 @@ func (Task_Type) EnumDescriptor() ([]byte, []int) {
 	return file_proto_mapreduce_proto_rawDescGZIP(), []int{3, 0}
 }
 
+type GetJobStatusResponse_Status int32
+
+const (
+	GetJobStatusResponse_UNKNOWN GetJobStatusResponse_Status = 0
+	GetJobStatusResponse_RUNNING GetJobStatusResponse_Status = 1
+	GetJobStatusResponse_DONE    GetJobStatusResponse_Status = 2
+	GetJobStatusResponse_FAILED  GetJobStatusResponse_Status = 3
+)
+
+// Enum value maps for GetJobStatusResponse_Status.
+var (
+	GetJobStatusResponse_Status_name = map[int32]string{
+		0: "UNKNOWN",
+		1: "RUNNING",
+		2: "DONE",
+		3: "FAILED",
+	}
+	GetJobStatusResponse_Status_value = map[string]int32{
+		"UNKNOWN": 0,
+		"RUNNING": 1,
+		"DONE":    2,
+		"FAILED":  3,
+	}
+)
+
+func (x GetJobStatusResponse_Status) Enum() *GetJobStatusResponse_Status {
+	p := new(GetJobStatusResponse_Status)
+	*p = x
+	return p
+}
+
+func (x GetJobStatusResponse_Status) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (GetJobStatusResponse_Status) Descriptor() protoreflect.EnumDescriptor {
+	return file_proto_mapreduce_proto_enumTypes[1].Descriptor()
+}
+
+func (GetJobStatusResponse_Status) Type() protoreflect.EnumType {
+	return &file_proto_mapreduce_proto_enumTypes[1]
+}
+
+func (x GetJobStatusResponse_Status) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use GetJobStatusResponse_Status.Descriptor instead.
+func (GetJobStatusResponse_Status) EnumDescriptor() ([]byte, []int) {
+	return file_proto_mapreduce_proto_rawDescGZIP(), []int{12, 0}
+}
+
 type WorkerInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Addr          string                 `protobuf:"bytes,1,opt,name=addr,proto3" json:"addr,omitempty"`
@@ -201,10 +253,11 @@ type Task struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Type          Task_Type              `protobuf:"varint,1,opt,name=type,proto3,enum=Task_Type" json:"type,omitempty"`
 	TaskId        int32                  `protobuf:"varint,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	FilePath      string                 `protobuf:"bytes,3,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`       // map: путь к фалу
-	Partition     int32                  `protobuf:"varint,4,opt,name=partition,proto3" json:"partition,omitempty"`                    // reduce: номер партиции
-	SpillAddrs    []string               `protobuf:"bytes,5,rep,name=spill_addrs,json=spillAddrs,proto3" json:"spill_addrs,omitempty"` // reduce: адреса воркеров с нужными файлами
+	FilePath      string                 `protobuf:"bytes,3,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
+	Partition     int32                  `protobuf:"varint,4,opt,name=partition,proto3" json:"partition,omitempty"`
+	SpillAddrs    []string               `protobuf:"bytes,5,rep,name=spill_addrs,json=spillAddrs,proto3" json:"spill_addrs,omitempty"`
 	NumPartitions int32                  `protobuf:"varint,6,opt,name=num_partitions,json=numPartitions,proto3" json:"num_partitions,omitempty"`
+	JobId         int32                  `protobuf:"varint,7,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -281,11 +334,21 @@ func (x *Task) GetNumPartitions() int32 {
 	return 0
 }
 
+func (x *Task) GetJobId() int32 {
+	if x != nil {
+		return x.JobId
+	}
+	return 0
+}
+
 type TaskDone struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	WorkerAddr           string                 `protobuf:"bytes,1,opt,name=worker_addr,json=workerAddr,proto3" json:"worker_addr,omitempty"`
 	TaskId               int32                  `protobuf:"varint,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
-	NumCreatedPartitions int32                  `protobuf:"varint,3,opt,name=num_created_partitions,json=numCreatedPartitions,proto3" json:"num_created_partitions,omitempty"` // map : сколько партиций создалось
+	NumCreatedPartitions int32                  `protobuf:"varint,3,opt,name=num_created_partitions,json=numCreatedPartitions,proto3" json:"num_created_partitions,omitempty"`
+	JobId                int32                  `protobuf:"varint,4,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	Failed               bool                   `protobuf:"varint,5,opt,name=failed,proto3" json:"failed,omitempty"`
+	ErrorMessage         string                 `protobuf:"bytes,6,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -341,9 +404,31 @@ func (x *TaskDone) GetNumCreatedPartitions() int32 {
 	return 0
 }
 
+func (x *TaskDone) GetJobId() int32 {
+	if x != nil {
+		return x.JobId
+	}
+	return 0
+}
+
+func (x *TaskDone) GetFailed() bool {
+	if x != nil {
+		return x.Failed
+	}
+	return false
+}
+
+func (x *TaskDone) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
 type FetchSpillRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Partition     int32                  `protobuf:"varint,2,opt,name=partition,proto3" json:"partition,omitempty"`
+	JobId         int32                  `protobuf:"varint,3,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -385,9 +470,17 @@ func (x *FetchSpillRequest) GetPartition() int32 {
 	return 0
 }
 
+func (x *FetchSpillRequest) GetJobId() int32 {
+	if x != nil {
+		return x.JobId
+	}
+	return 0
+}
+
 type FetchResultRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Partition     int32                  `protobuf:"varint,1,opt,name=partition,proto3" json:"partition,omitempty"`
+	JobId         int32                  `protobuf:"varint,2,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -425,6 +518,13 @@ func (*FetchResultRequest) Descriptor() ([]byte, []int) {
 func (x *FetchResultRequest) GetPartition() int32 {
 	if x != nil {
 		return x.Partition
+	}
+	return 0
+}
+
+func (x *FetchResultRequest) GetJobId() int32 {
+	if x != nil {
+		return x.JobId
 	}
 	return 0
 }
@@ -517,6 +617,198 @@ func (x *SpillChunk) GetData() []byte {
 	return nil
 }
 
+type SubmitJobRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	FilePaths     []string               `protobuf:"bytes,1,rep,name=file_paths,json=filePaths,proto3" json:"file_paths,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmitJobRequest) Reset() {
+	*x = SubmitJobRequest{}
+	mi := &file_proto_mapreduce_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitJobRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitJobRequest) ProtoMessage() {}
+
+func (x *SubmitJobRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_mapreduce_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitJobRequest.ProtoReflect.Descriptor instead.
+func (*SubmitJobRequest) Descriptor() ([]byte, []int) {
+	return file_proto_mapreduce_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SubmitJobRequest) GetFilePaths() []string {
+	if x != nil {
+		return x.FilePaths
+	}
+	return nil
+}
+
+type SubmitJobResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         int32                  `protobuf:"varint,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SubmitJobResponse) Reset() {
+	*x = SubmitJobResponse{}
+	mi := &file_proto_mapreduce_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SubmitJobResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SubmitJobResponse) ProtoMessage() {}
+
+func (x *SubmitJobResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_mapreduce_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SubmitJobResponse.ProtoReflect.Descriptor instead.
+func (*SubmitJobResponse) Descriptor() ([]byte, []int) {
+	return file_proto_mapreduce_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *SubmitJobResponse) GetJobId() int32 {
+	if x != nil {
+		return x.JobId
+	}
+	return 0
+}
+
+type GetJobStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	JobId         int32                  `protobuf:"varint,1,opt,name=job_id,json=jobId,proto3" json:"job_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetJobStatusRequest) Reset() {
+	*x = GetJobStatusRequest{}
+	mi := &file_proto_mapreduce_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetJobStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetJobStatusRequest) ProtoMessage() {}
+
+func (x *GetJobStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_mapreduce_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetJobStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetJobStatusRequest) Descriptor() ([]byte, []int) {
+	return file_proto_mapreduce_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *GetJobStatusRequest) GetJobId() int32 {
+	if x != nil {
+		return x.JobId
+	}
+	return 0
+}
+
+type GetJobStatusResponse struct {
+	state         protoimpl.MessageState      `protogen:"open.v1"`
+	Status        GetJobStatusResponse_Status `protobuf:"varint,1,opt,name=status,proto3,enum=GetJobStatusResponse_Status" json:"status,omitempty"`
+	IndexPath     string                      `protobuf:"bytes,2,opt,name=index_path,json=indexPath,proto3" json:"index_path,omitempty"` // set when status = DONE
+	ErrorMessage  string                      `protobuf:"bytes,3,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetJobStatusResponse) Reset() {
+	*x = GetJobStatusResponse{}
+	mi := &file_proto_mapreduce_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetJobStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetJobStatusResponse) ProtoMessage() {}
+
+func (x *GetJobStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_mapreduce_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetJobStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetJobStatusResponse) Descriptor() ([]byte, []int) {
+	return file_proto_mapreduce_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *GetJobStatusResponse) GetStatus() GetJobStatusResponse_Status {
+	if x != nil {
+		return x.Status
+	}
+	return GetJobStatusResponse_UNKNOWN
+}
+
+func (x *GetJobStatusResponse) GetIndexPath() string {
+	if x != nil {
+		return x.IndexPath
+	}
+	return ""
+}
+
+func (x *GetJobStatusResponse) GetErrorMessage() string {
+	if x != nil {
+		return x.ErrorMessage
+	}
+	return ""
+}
+
 var File_proto_mapreduce_proto protoreflect.FileDescriptor
 
 const file_proto_mapreduce_proto_rawDesc = "" +
@@ -528,7 +820,7 @@ const file_proto_mapreduce_proto_rawDesc = "" +
 	"\x03Ack\".\n" +
 	"\vTaskRequest\x12\x1f\n" +
 	"\vworker_addr\x18\x01 \x01(\tR\n" +
-	"workerAddr\"\xf7\x01\n" +
+	"workerAddr\"\x8e\x02\n" +
 	"\x04Task\x12\x1e\n" +
 	"\x04type\x18\x01 \x01(\x0e2\n" +
 	".Task.TypeR\x04type\x12\x17\n" +
@@ -537,34 +829,60 @@ const file_proto_mapreduce_proto_rawDesc = "" +
 	"\tpartition\x18\x04 \x01(\x05R\tpartition\x12\x1f\n" +
 	"\vspill_addrs\x18\x05 \x03(\tR\n" +
 	"spillAddrs\x12%\n" +
-	"\x0enum_partitions\x18\x06 \x01(\x05R\rnumPartitions\"3\n" +
+	"\x0enum_partitions\x18\x06 \x01(\x05R\rnumPartitions\x12\x15\n" +
+	"\x06job_id\x18\a \x01(\x05R\x05jobId\"3\n" +
 	"\x04Type\x12\b\n" +
 	"\x04IDLE\x10\x00\x12\a\n" +
 	"\x03MAP\x10\x01\x12\n" +
 	"\n" +
 	"\x06REDUCE\x10\x02\x12\f\n" +
-	"\bSHUTDOWN\x10\x03\"z\n" +
+	"\bSHUTDOWN\x10\x03\"\xce\x01\n" +
 	"\bTaskDone\x12\x1f\n" +
 	"\vworker_addr\x18\x01 \x01(\tR\n" +
 	"workerAddr\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\x05R\x06taskId\x124\n" +
-	"\x16num_created_partitions\x18\x03 \x01(\x05R\x14numCreatedPartitions\"1\n" +
+	"\x16num_created_partitions\x18\x03 \x01(\x05R\x14numCreatedPartitions\x12\x15\n" +
+	"\x06job_id\x18\x04 \x01(\x05R\x05jobId\x12\x16\n" +
+	"\x06failed\x18\x05 \x01(\bR\x06failed\x12#\n" +
+	"\rerror_message\x18\x06 \x01(\tR\ferrorMessage\"H\n" +
 	"\x11FetchSpillRequest\x12\x1c\n" +
-	"\tpartition\x18\x02 \x01(\x05R\tpartition\"2\n" +
+	"\tpartition\x18\x02 \x01(\x05R\tpartition\x12\x15\n" +
+	"\x06job_id\x18\x03 \x01(\x05R\x05jobId\"I\n" +
 	"\x12FetchResultRequest\x12\x1c\n" +
-	"\tpartition\x18\x01 \x01(\x05R\tpartition\"3\n" +
+	"\tpartition\x18\x01 \x01(\x05R\tpartition\x12\x15\n" +
+	"\x06job_id\x18\x02 \x01(\x05R\x05jobId\"3\n" +
 	"\x10HeartbeatRequest\x12\x1f\n" +
 	"\vworker_addr\x18\x01 \x01(\tR\n" +
 	"workerAddr\" \n" +
 	"\n" +
 	"SpillChunk\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data2\x96\x01\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\"1\n" +
+	"\x10SubmitJobRequest\x12\x1d\n" +
+	"\n" +
+	"file_paths\x18\x01 \x03(\tR\tfilePaths\"*\n" +
+	"\x11SubmitJobResponse\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\x05R\x05jobId\",\n" +
+	"\x13GetJobStatusRequest\x12\x15\n" +
+	"\x06job_id\x18\x01 \x01(\x05R\x05jobId\"\xca\x01\n" +
+	"\x14GetJobStatusResponse\x124\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x1c.GetJobStatusResponse.StatusR\x06status\x12\x1d\n" +
+	"\n" +
+	"index_path\x18\x02 \x01(\tR\tindexPath\x12#\n" +
+	"\rerror_message\x18\x03 \x01(\tR\ferrorMessage\"8\n" +
+	"\x06Status\x12\v\n" +
+	"\aUNKNOWN\x10\x00\x12\v\n" +
+	"\aRUNNING\x10\x01\x12\b\n" +
+	"\x04DONE\x10\x02\x12\n" +
+	"\n" +
+	"\x06FAILED\x10\x032\x87\x02\n" +
 	"\x06Master\x12#\n" +
 	"\x0eRegisterWorker\x12\v.WorkerInfo\x1a\x04.Ack\x12\"\n" +
 	"\vRequestTask\x12\f.TaskRequest\x1a\x05.Task\x12\x1d\n" +
 	"\n" +
 	"ReportDone\x12\t.TaskDone\x1a\x04.Ack\x12$\n" +
-	"\tHeartbeat\x12\x11.HeartbeatRequest\x1a\x04.Ack2l\n" +
+	"\tHeartbeat\x12\x11.HeartbeatRequest\x1a\x04.Ack\x122\n" +
+	"\tSubmitJob\x12\x11.SubmitJobRequest\x1a\x12.SubmitJobResponse\x12;\n" +
+	"\fGetJobStatus\x12\x14.GetJobStatusRequest\x1a\x15.GetJobStatusResponse2l\n" +
 	"\x06Worker\x12/\n" +
 	"\n" +
 	"FetchSpill\x12\x12.FetchSpillRequest\x1a\v.SpillChunk0\x01\x121\n" +
@@ -582,39 +900,49 @@ func file_proto_mapreduce_proto_rawDescGZIP() []byte {
 	return file_proto_mapreduce_proto_rawDescData
 }
 
-var file_proto_mapreduce_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_mapreduce_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_proto_mapreduce_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_proto_mapreduce_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_proto_mapreduce_proto_goTypes = []any{
-	(Task_Type)(0),             // 0: Task.Type
-	(*WorkerInfo)(nil),         // 1: WorkerInfo
-	(*Ack)(nil),                // 2: Ack
-	(*TaskRequest)(nil),        // 3: TaskRequest
-	(*Task)(nil),               // 4: Task
-	(*TaskDone)(nil),           // 5: TaskDone
-	(*FetchSpillRequest)(nil),  // 6: FetchSpillRequest
-	(*FetchResultRequest)(nil), // 7: FetchResultRequest
-	(*HeartbeatRequest)(nil),   // 8: HeartbeatRequest
-	(*SpillChunk)(nil),         // 9: SpillChunk
+	(Task_Type)(0),                   // 0: Task.Type
+	(GetJobStatusResponse_Status)(0), // 1: GetJobStatusResponse.Status
+	(*WorkerInfo)(nil),               // 2: WorkerInfo
+	(*Ack)(nil),                      // 3: Ack
+	(*TaskRequest)(nil),              // 4: TaskRequest
+	(*Task)(nil),                     // 5: Task
+	(*TaskDone)(nil),                 // 6: TaskDone
+	(*FetchSpillRequest)(nil),        // 7: FetchSpillRequest
+	(*FetchResultRequest)(nil),       // 8: FetchResultRequest
+	(*HeartbeatRequest)(nil),         // 9: HeartbeatRequest
+	(*SpillChunk)(nil),               // 10: SpillChunk
+	(*SubmitJobRequest)(nil),         // 11: SubmitJobRequest
+	(*SubmitJobResponse)(nil),        // 12: SubmitJobResponse
+	(*GetJobStatusRequest)(nil),      // 13: GetJobStatusRequest
+	(*GetJobStatusResponse)(nil),     // 14: GetJobStatusResponse
 }
 var file_proto_mapreduce_proto_depIdxs = []int32{
-	0, // 0: Task.type:type_name -> Task.Type
-	1, // 1: Master.RegisterWorker:input_type -> WorkerInfo
-	3, // 2: Master.RequestTask:input_type -> TaskRequest
-	5, // 3: Master.ReportDone:input_type -> TaskDone
-	8, // 4: Master.Heartbeat:input_type -> HeartbeatRequest
-	6, // 5: Worker.FetchSpill:input_type -> FetchSpillRequest
-	7, // 6: Worker.FetchResult:input_type -> FetchResultRequest
-	2, // 7: Master.RegisterWorker:output_type -> Ack
-	4, // 8: Master.RequestTask:output_type -> Task
-	2, // 9: Master.ReportDone:output_type -> Ack
-	2, // 10: Master.Heartbeat:output_type -> Ack
-	9, // 11: Worker.FetchSpill:output_type -> SpillChunk
-	9, // 12: Worker.FetchResult:output_type -> SpillChunk
-	7, // [7:13] is the sub-list for method output_type
-	1, // [1:7] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0,  // 0: Task.type:type_name -> Task.Type
+	1,  // 1: GetJobStatusResponse.status:type_name -> GetJobStatusResponse.Status
+	2,  // 2: Master.RegisterWorker:input_type -> WorkerInfo
+	4,  // 3: Master.RequestTask:input_type -> TaskRequest
+	6,  // 4: Master.ReportDone:input_type -> TaskDone
+	9,  // 5: Master.Heartbeat:input_type -> HeartbeatRequest
+	11, // 6: Master.SubmitJob:input_type -> SubmitJobRequest
+	13, // 7: Master.GetJobStatus:input_type -> GetJobStatusRequest
+	7,  // 8: Worker.FetchSpill:input_type -> FetchSpillRequest
+	8,  // 9: Worker.FetchResult:input_type -> FetchResultRequest
+	3,  // 10: Master.RegisterWorker:output_type -> Ack
+	5,  // 11: Master.RequestTask:output_type -> Task
+	3,  // 12: Master.ReportDone:output_type -> Ack
+	3,  // 13: Master.Heartbeat:output_type -> Ack
+	12, // 14: Master.SubmitJob:output_type -> SubmitJobResponse
+	14, // 15: Master.GetJobStatus:output_type -> GetJobStatusResponse
+	10, // 16: Worker.FetchSpill:output_type -> SpillChunk
+	10, // 17: Worker.FetchResult:output_type -> SpillChunk
+	10, // [10:18] is the sub-list for method output_type
+	2,  // [2:10] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_proto_mapreduce_proto_init() }
@@ -627,8 +955,8 @@ func file_proto_mapreduce_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_mapreduce_proto_rawDesc), len(file_proto_mapreduce_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   9,
+			NumEnums:      2,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

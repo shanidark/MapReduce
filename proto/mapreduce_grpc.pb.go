@@ -23,6 +23,8 @@ const (
 	Master_RequestTask_FullMethodName    = "/Master/RequestTask"
 	Master_ReportDone_FullMethodName     = "/Master/ReportDone"
 	Master_Heartbeat_FullMethodName      = "/Master/Heartbeat"
+	Master_SubmitJob_FullMethodName      = "/Master/SubmitJob"
+	Master_GetJobStatus_FullMethodName   = "/Master/GetJobStatus"
 )
 
 // MasterClient is the client API for Master service.
@@ -33,6 +35,8 @@ type MasterClient interface {
 	RequestTask(ctx context.Context, in *TaskRequest, opts ...grpc.CallOption) (*Task, error)
 	ReportDone(ctx context.Context, in *TaskDone, opts ...grpc.CallOption) (*Ack, error)
 	Heartbeat(ctx context.Context, in *HeartbeatRequest, opts ...grpc.CallOption) (*Ack, error)
+	SubmitJob(ctx context.Context, in *SubmitJobRequest, opts ...grpc.CallOption) (*SubmitJobResponse, error)
+	GetJobStatus(ctx context.Context, in *GetJobStatusRequest, opts ...grpc.CallOption) (*GetJobStatusResponse, error)
 }
 
 type masterClient struct {
@@ -83,6 +87,26 @@ func (c *masterClient) Heartbeat(ctx context.Context, in *HeartbeatRequest, opts
 	return out, nil
 }
 
+func (c *masterClient) SubmitJob(ctx context.Context, in *SubmitJobRequest, opts ...grpc.CallOption) (*SubmitJobResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitJobResponse)
+	err := c.cc.Invoke(ctx, Master_SubmitJob_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *masterClient) GetJobStatus(ctx context.Context, in *GetJobStatusRequest, opts ...grpc.CallOption) (*GetJobStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetJobStatusResponse)
+	err := c.cc.Invoke(ctx, Master_GetJobStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MasterServer is the server API for Master service.
 // All implementations must embed UnimplementedMasterServer
 // for forward compatibility.
@@ -91,6 +115,8 @@ type MasterServer interface {
 	RequestTask(context.Context, *TaskRequest) (*Task, error)
 	ReportDone(context.Context, *TaskDone) (*Ack, error)
 	Heartbeat(context.Context, *HeartbeatRequest) (*Ack, error)
+	SubmitJob(context.Context, *SubmitJobRequest) (*SubmitJobResponse, error)
+	GetJobStatus(context.Context, *GetJobStatusRequest) (*GetJobStatusResponse, error)
 	mustEmbedUnimplementedMasterServer()
 }
 
@@ -112,6 +138,12 @@ func (UnimplementedMasterServer) ReportDone(context.Context, *TaskDone) (*Ack, e
 }
 func (UnimplementedMasterServer) Heartbeat(context.Context, *HeartbeatRequest) (*Ack, error) {
 	return nil, status.Error(codes.Unimplemented, "method Heartbeat not implemented")
+}
+func (UnimplementedMasterServer) SubmitJob(context.Context, *SubmitJobRequest) (*SubmitJobResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SubmitJob not implemented")
+}
+func (UnimplementedMasterServer) GetJobStatus(context.Context, *GetJobStatusRequest) (*GetJobStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetJobStatus not implemented")
 }
 func (UnimplementedMasterServer) mustEmbedUnimplementedMasterServer() {}
 func (UnimplementedMasterServer) testEmbeddedByValue()                {}
@@ -206,6 +238,42 @@ func _Master_Heartbeat_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Master_SubmitJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitJobRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MasterServer).SubmitJob(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Master_SubmitJob_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MasterServer).SubmitJob(ctx, req.(*SubmitJobRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Master_GetJobStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetJobStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MasterServer).GetJobStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Master_GetJobStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MasterServer).GetJobStatus(ctx, req.(*GetJobStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Master_ServiceDesc is the grpc.ServiceDesc for Master service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -228,6 +296,14 @@ var Master_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Heartbeat",
 			Handler:    _Master_Heartbeat_Handler,
+		},
+		{
+			MethodName: "SubmitJob",
+			Handler:    _Master_SubmitJob_Handler,
+		},
+		{
+			MethodName: "GetJobStatus",
+			Handler:    _Master_GetJobStatus_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -5,13 +5,8 @@ services:
     command:
       - "--mode=master"
       - "--min_workers=3"
-      - "/data/doc1.txt"
-      - "/data/doc2.txt"
-      - "/data/doc3.txt"
-      - "/data/doc4.txt"
-      - "/data/doc5.txt"
     volumes:
-      - ./test-inputs:/data:ro
+      - ./input:/data:ro
       - ./output:/workdir
     environment:
       - LOG_FORMAT=json
@@ -24,7 +19,7 @@ services:
     container_name: mr-worker-1
     command: ["--mode=worker", "--addr=worker-1:50052", "--master_addr=master:50051"]
     volumes:
-      - ./test-inputs:/data:ro
+      - ./input:/data:ro
       - worker-1-workdir:/workdir
     environment:
       - LOG_FORMAT=json
@@ -33,13 +28,14 @@ services:
     working_dir: /workdir
     depends_on:
       - master
+    restart: on-failure
 
   worker-2:
     build: .
     container_name: mr-worker-2
     command: ["--mode=worker", "--addr=worker-2:50052", "--master_addr=master:50051"]
     volumes:
-      - ./test-inputs:/data:ro
+      - ./input:/data:ro
       - worker-2-workdir:/workdir
     environment:
       - LOG_FORMAT=json
@@ -48,13 +44,14 @@ services:
     working_dir: /workdir
     depends_on:
       - master
+    restart: on-failure
 
   worker-3:
     build: .
     container_name: mr-worker-3
     command: ["--mode=worker", "--addr=worker-3:50052", "--master_addr=master:50051"]
     volumes:
-      - ./test-inputs:/data:ro
+      - ./input:/data:ro
       - worker-3-workdir:/workdir
     environment:
       - LOG_FORMAT=json
@@ -63,6 +60,38 @@ services:
     working_dir: /workdir
     depends_on:
       - master
+    restart: on-failure
+
+  client:
+    build: .
+    profiles: ["manual"]
+    volumes:
+      - ./input:/data:ro
+    environment:
+      - LOG_FORMAT=json
+    depends_on:
+      - master
+  
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: mr-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9091:9090"
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mr-grafana
+    volumes:
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+    ports:
+      - "3000:3000"
+
 
 volumes:
   worker-1-workdir:
