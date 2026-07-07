@@ -13,8 +13,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 var NUM_WORKERS int64 = int64(runtime.NumCPU())
@@ -92,17 +95,47 @@ func runClient(masterAddr string, files []string) {
 	mc := pb.NewMasterClient(conn)
 
 	resp, err := mc.SubmitJob(ctx, &pb.SubmitJobRequest{FilePaths: s3Keys})
-	check(err)
+	if err != nil {
+		if st, ok := status.FromError(err); ok && st.Code() == codes.ResourceExhausted {
+			slog.Error("master is rate-limiting submissions, try again later", "err", err)
+			os.Exit(1)
+		}
+		check(err)
+	}
 	jobID := resp.JobId
 	slog.Info("job submitted", "job_id", jobID, "num_files", len(s3Keys))
 
+	const (
+		basePollInterval     = 1 * time.Second
+		maxPollInterval      = 30 * time.Second
+		maxConsecutiveErrors = 10
+	)
+
+	pollInterval := basePollInterval
+	consecutiveErrors := 0
+
 	for {
-		time.Sleep(2 * time.Second)
+		time.Sleep(pollInterval)
 		status, err := mc.GetJobStatus(ctx, &pb.GetJobStatusRequest{JobId: jobID})
 		if err != nil {
-			slog.Warn("GetJobStatus failed", "err", err)
+			consecutiveErrors++
+			slog.Warn("GetJobStatus failed",
+				"err", err,
+				"consecutive_errors", consecutiveErrors,
+				"next_retry_in", pollInterval)
+			if consecutiveErrors >= maxConsecutiveErrors {
+				slog.Error("giving up on job status polling",
+					"job_id", jobID,
+					"consecutive_errors", consecutiveErrors)
+				os.Exit(1)
+			}
+			pollInterval = min(pollInterval*2, maxPollInterval)
 			continue
 		}
+
+		consecutiveErrors = 0
+		pollInterval = basePollInterval
+
 		if status.Status == pb.GetJobStatusResponse_DONE {
 			slog.Info("job done", "job_id", jobID, "index_path", status.IndexPath)
 			return
@@ -127,11 +160,12 @@ func runMaster(minWorkers int, metricsAddr string) {
 	check(err)
 
 	impl := &masterImpl{
-		minWorkers: minWorkers,
-		lastSeen:   make(map[string]time.Time),
-		jobs:       make(map[int32]*job),
-		dir:        dir,
-		store:      store,
+		minWorkers:    minWorkers,
+		lastSeen:      make(map[string]time.Time),
+		jobs:          make(map[int32]*job),
+		dir:           dir,
+		store:         store,
+		submitLimiter: rate.NewLimiter(5, 10),
 	}
 
 	lis, e := net.Listen("tcp", ":50051")

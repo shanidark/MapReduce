@@ -19,6 +19,8 @@ type ObjectStore interface {
 	List(ctx context.Context, prefix string) ([]string, error)
 
 	Delete(ctx context.Context, key string) error
+
+	DeletePrefix(ctx context.Context, prefix string) error
 }
 
 type s3Store struct {
@@ -92,4 +94,27 @@ func (s *s3Store) List(ctx context.Context, prefix string) ([]string, error) {
 
 func (s *s3Store) Delete(ctx context.Context, key string) error {
 	return s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{})
+}
+
+func (s *s3Store) DeletePrefix(ctx context.Context, prefix string) error {
+	objectsCh := make(chan minio.ObjectInfo)
+	go func() {
+		defer close(objectsCh)
+		for obj := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{
+			Prefix:    prefix,
+			Recursive: true,
+		}) {
+			if obj.Err != nil {
+				continue
+			}
+			objectsCh <- obj
+		}
+	}()
+
+	for err := range s.client.RemoveObjects(ctx, s.bucket, objectsCh, minio.RemoveObjectsOptions{}) {
+		if err.Err != nil {
+			return err.Err
+		}
+	}
+	return nil
 }

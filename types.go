@@ -6,6 +6,8 @@ import (
 	"os"
 	"sync"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type Chunk struct {
@@ -75,6 +77,8 @@ type masterImpl struct {
 
 	dir   string
 	store ObjectStore
+
+	submitLimiter *rate.Limiter
 }
 
 type mapTask struct {

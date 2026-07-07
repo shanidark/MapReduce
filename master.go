@@ -10,7 +10,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
 const maxTaskAttempts = 3
@@ -260,8 +265,13 @@ func (m *masterImpl) checkTimeouts(timeout time.Duration) {
 	}
 }
 
-func (m *masterImpl) SubmitJob(_ context.Context,
+func (m *masterImpl) SubmitJob(ctx context.Context,
 	req *pb.SubmitJobRequest) (*pb.SubmitJobResponse, error) {
+	if !m.submitLimiter.Allow() {
+		slog.Warn("SubmitJob rate limit exceeded", "client", clientAddrFromCtx(ctx))
+		return nil, status.Error(codes.ResourceExhausted, "job submission rate limit exceeded, retry later")
+	}
+
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 
@@ -393,6 +403,7 @@ func (m *masterImpl) finalizeJob(j *job) {
 	m.mtx.Unlock()
 
 	log.Info("job finalized", "final_key", finalKey, "local_path", localPath)
+	go m.cleanupJobArtifacts(j, log)
 }
 
 func hasFailedTasks(j *job) bool {
@@ -407,4 +418,52 @@ func hasFailedTasks(j *job) bool {
 		}
 	}
 	return false
+}
+
+func (m *masterImpl) cleanupJobArtifacts(j *job, log *slog.Logger) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	jobID := j.id
+
+	prefixes := []string{
+		"spill/" + strconv.FormatInt(int64(jobID), 10) + "/",
+	}
+
+	for partition := 0; partition < j.numPartitions; partition++ {
+		key := "index/" + strconv.FormatInt(int64(jobID), 10) + "/" + strconv.Itoa(partition)
+		if err := m.store.Delete(ctx, key); err != nil {
+			log.Warn("cleanup: failed to delete index partition", "key", key, "err", err)
+		}
+	}
+
+	if len(j.files) > 0 {
+		firstKey := j.files[0]
+		if inputPrefix := deriveInputPrefix(firstKey); inputPrefix != "" {
+			prefixes = append(prefixes, inputPrefix)
+		}
+	}
+
+	for _, prefix := range prefixes {
+		if err := m.store.DeletePrefix(ctx, prefix); err != nil {
+			log.Warn("cleanup: failed to delete prefix", "prefix", prefix, "err", err)
+			continue
+		}
+		log.Info("cleanup: deleted prefix", "prefix", prefix)
+	}
+}
+
+func deriveInputPrefix(key string) string {
+	parts := strings.SplitN(key, "/", 3)
+	if len(parts) < 3 || parts[0] != "input" {
+		return ""
+	}
+	return parts[0] + "/" + parts[1] + "/"
+}
+
+func clientAddrFromCtx(ctx context.Context) string {
+	if p, ok := peer.FromContext(ctx); ok {
+		return p.Addr.String()
+	}
+	return "unknown"
 }
