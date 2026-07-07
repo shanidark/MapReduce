@@ -12,61 +12,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	grpc "google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
-func hasSpillPartition(name string, jobID int32, partition int) bool {
-	if !strings.HasPrefix(name, spillFilePrefix) {
-		return false
-	}
-	prefix := spillFilePrefix + strconv.FormatInt(int64(jobID), 10) + "-"
-	if !strings.HasPrefix(name, prefix) {
-		return false
-	}
-	suffix := "-" + strconv.Itoa(partition)
-	return strings.HasSuffix(name, suffix)
-}
-
-func (w *workerImpl) FetchSpill(req *pb.FetchSpillRequest,
-	stream pb.Worker_FetchSpillServer) error {
-	entries, err := os.ReadDir(w.dir)
-	check(err)
-	buf := make([]byte, 64*1024)
-	for _, entry := range entries {
-		if !hasSpillPartition(entry.Name(), req.JobId, int(req.Partition)) {
-			continue
-		}
-		file, err := os.Open(filepath.Join(w.dir, entry.Name()))
-		check(err)
-
-		for {
-			n, err := file.Read(buf)
-			if n > 0 {
-				if sendErr := stream.Send(&pb.SpillChunk{Data: buf[:n]}); sendErr != nil {
-					file.Close()
-					return sendErr
-				}
-			}
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				file.Close()
-				return err
-			}
-		}
-		file.Close()
-	}
-	return nil
-
-}
-
-func OpenMapTaskContext(jobID int32, taskID int, numPartitions uint64, dir string) WorkerContext {
+func OpenMapTaskContext(jobID int32, taskID int, numPartitions uint64, dir string, store ObjectStore) WorkerContext {
 	files := make([]*os.File, numPartitions)
 	writers := make([]*bufio.Writer, numPartitions)
 	partitionFiles := make(map[int]string, numPartitions)
+	s3Keys := make([]string, numPartitions)
 
 	for i := range numPartitions {
 		name := spillFilePrefix + strconv.FormatInt(int64(jobID), 10) + "-" + strconv.Itoa(taskID) + "-" + strconv.FormatUint(i, 10)
@@ -76,20 +28,25 @@ func OpenMapTaskContext(jobID int32, taskID int, numPartitions uint64, dir strin
 		files[i] = f
 		writers[i] = bufio.NewWriter(f)
 		partitionFiles[int(i)] = path
+		s3Keys[i] = "spill/" + strconv.FormatInt(int64(jobID), 10) + "/" + strconv.Itoa(taskID) + "/" + strconv.FormatUint(i, 10)
 	}
 	return WorkerContext{
 		writers:        writers,
 		files:          files,
 		PartitionFiles: partitionFiles,
+		store:          store,
+		s3Keys:         s3Keys,
+		jobID:          jobID,
+		taskID:         taskID,
 	}
 }
 
-func doMap(task *pb.Task, dir string, myAddr string,
+func doMap(task *pb.Task, dir string, myAddr string, store ObjectStore,
 	mc pb.MasterClient, ctx context.Context) {
 	start := time.Now()
 	defer func() { taskDuration.WithLabelValues("map").Observe(time.Since(start).Seconds()) }()
 	log := slog.With("worker_addr", myAddr, "task_id", task.TaskId, "job_id", task.JobId, "phase", "map")
-	log.Info("doMap starting")
+	log.Info("doMap starting", "s3_key", task.FilePath)
 
 	if s := os.Getenv("SIMULATE_SLOW_MAP"); s != "" {
 		d, _ := time.ParseDuration(s)
@@ -99,12 +56,12 @@ func doMap(task *pb.Task, dir string, myAddr string,
 	n := uint64(task.NumPartitions)
 	taskID := int(task.TaskId)
 
-	wc := OpenMapTaskContext(task.JobId, taskID, n, dir)
-	defer wc.Close()
+	wc := OpenMapTaskContext(task.JobId, taskID, n, dir, store)
 
-	file, err := os.Open(task.FilePath)
+	reader, err := store.Get(ctx, task.FilePath)
 	if err != nil {
-		log.Error("cannot open input file", "err", err)
+		log.Error("cannot open input from s3", "key", task.FilePath, "err", err)
+		wc.Close(ctx)
 		_, reportErr := mc.ReportDone(ctx, &pb.TaskDone{
 			WorkerAddr:   myAddr,
 			TaskId:       task.TaskId,
@@ -117,18 +74,33 @@ func doMap(task *pb.Task, dir string, myAddr string,
 		}
 		return
 	}
-	defer file.Close()
 
 	buf := make([]byte, ChunkSize)
 	for {
-		n, err := file.Read(buf)
-		if n > 0 {
-			Map(Chunk{FileID: taskID, Data: buf[:n]}, &wc)
+		nRead, err := reader.Read(buf)
+		if nRead > 0 {
+			Map(Chunk{FileID: taskID, Data: buf[:nRead]}, &wc)
 		}
 		if err == io.EOF {
 			break
 		}
 		check(err)
+	}
+	reader.Close()
+
+	if err := wc.Close(ctx); err != nil {
+		log.Error("failed to upload spills to s3", "err", err)
+		_, reportErr := mc.ReportDone(ctx, &pb.TaskDone{
+			WorkerAddr:   myAddr,
+			TaskId:       task.TaskId,
+			JobId:        task.JobId,
+			Failed:       true,
+			ErrorMessage: err.Error(),
+		})
+		if reportErr != nil {
+			log.Error("failed to report task failure", "err", reportErr)
+		}
+		return
 	}
 
 	_, err = mc.ReportDone(ctx, &pb.TaskDone{
@@ -140,7 +112,7 @@ func doMap(task *pb.Task, dir string, myAddr string,
 	log.Info("doMap finished")
 }
 
-func doReduce(task *pb.Task, dir string, myAddr string,
+func doReduce(task *pb.Task, dir string, myAddr string, store ObjectStore,
 	mc pb.MasterClient, ctx context.Context) {
 	start := time.Now()
 	defer func() { taskDuration.WithLabelValues("reduce").Observe(time.Since(start).Seconds()) }()
@@ -156,20 +128,44 @@ func doReduce(task *pb.Task, dir string, myAddr string,
 	taskID := task.TaskId
 	jobID := task.JobId
 
-	// downloading spill-files
+	spillPrefix := "spill/" + strconv.FormatInt(int64(jobID), 10) + "/"
+	spillSuffix := "/" + strconv.Itoa(partition)
+
+	allKeys, err := store.List(ctx, spillPrefix)
+	if err != nil {
+		reportReduceFailure(ctx, mc, myAddr, task, log, "list spills: "+err.Error())
+		return
+	}
+
 	mergedPath := filepath.Join(dir, "reduce-merged-"+strconv.FormatInt(int64(jobID), 10)+"-"+strconv.Itoa(partition))
 	merged, err := os.Create(mergedPath)
 	check(err)
 
-	for _, addr := range task.SpillAddrs {
-		fetchSpillFromWorker(ctx, addr, partition, jobID, merged)
+	for _, key := range allKeys {
+		if !strings.HasSuffix(key, spillSuffix) {
+			continue
+		}
+		reader, err := store.Get(ctx, key)
+		if err != nil {
+			merged.Close()
+			os.Remove(mergedPath)
+			reportReduceFailure(ctx, mc, myAddr, task, log, "get spill "+key+": "+err.Error())
+			return
+		}
+		if _, err := io.Copy(merged, reader); err != nil {
+			reader.Close()
+			merged.Close()
+			os.Remove(mergedPath)
+			reportReduceFailure(ctx, mc, myAddr, task, log, "copy spill "+key+": "+err.Error())
+			return
+		}
+		reader.Close()
 	}
 	merged.Close()
 
-	// reduce
 	kvs := reducePartitionFromFile(mergedPath)
 
-	// making index part
+	indexKey := "index/" + strconv.FormatInt(int64(jobID), 10) + "/" + strconv.Itoa(partition)
 	resultPath := filepath.Join(dir, "index-"+strconv.FormatInt(int64(jobID), 10)+"-"+strconv.Itoa(partition))
 	f, err := os.Create(resultPath)
 	check(err)
@@ -180,7 +176,21 @@ func doReduce(task *pb.Task, dir string, myAddr string,
 	check(w.Flush())
 	f.Close()
 
+	uploadFile, err := os.Open(resultPath)
+	check(err)
+	stat, err := uploadFile.Stat()
+	check(err)
+	if err := store.Put(ctx, indexKey, uploadFile, stat.Size()); err != nil {
+		uploadFile.Close()
+		os.Remove(resultPath)
+		os.Remove(mergedPath)
+		reportReduceFailure(ctx, mc, myAddr, task, log, "upload index: "+err.Error())
+		return
+	}
+	uploadFile.Close()
+
 	os.Remove(mergedPath)
+	os.Remove(resultPath)
 
 	_, err = mc.ReportDone(ctx, &pb.TaskDone{
 		WorkerAddr: myAddr,
@@ -191,23 +201,17 @@ func doReduce(task *pb.Task, dir string, myAddr string,
 	log.Info("doReduce finished")
 }
 
-func fetchSpillFromWorker(ctx context.Context, addr string, partition int, jobID int32, out *os.File) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	check(err)
-	defer conn.Close()
-
-	wc := pb.NewWorkerClient(conn)
-	stream, err := wc.FetchSpill(ctx, &pb.FetchSpillRequest{Partition: int32(partition), JobId: jobID})
-	check(err)
-
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
-		check(err)
-		_, err = out.Write(chunk.Data)
-		check(err)
+func reportReduceFailure(ctx context.Context, mc pb.MasterClient, myAddr string, task *pb.Task, log *slog.Logger, msg string) {
+	log.Error("doReduce failed", "err", msg)
+	_, reportErr := mc.ReportDone(ctx, &pb.TaskDone{
+		WorkerAddr:   myAddr,
+		TaskId:       task.TaskId,
+		JobId:        task.JobId,
+		Failed:       true,
+		ErrorMessage: msg,
+	})
+	if reportErr != nil {
+		log.Error("failed to report reduce failure", "err", reportErr)
 	}
 }
 
@@ -242,37 +246,6 @@ func reducePartitionFromFile(path string) []KeyValue {
 		kvs = append(kvs, Reduce(key, index[key]))
 	}
 	return kvs
-}
-
-func (w *workerImpl) FetchResult(req *pb.FetchResultRequest,
-	stream pb.Worker_FetchResultServer) error {
-	name := "index-" + strconv.FormatInt(int64(req.JobId), 10) + "-" + strconv.Itoa(int(req.Partition))
-	path := filepath.Join(w.dir, name)
-
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	defer file.Close()
-
-	buf := make([]byte, 64*1024)
-	for {
-		n, err := file.Read(buf)
-		if n > 0 {
-			if sendErr := stream.Send(&pb.SpillChunk{Data: buf[:n]}); sendErr != nil {
-				return sendErr
-			}
-		}
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
 }
 
 func heartbeatLoop(ctx context.Context, mc pb.MasterClient, myAddr string) {

@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"io"
 	"log/slog"
 	pb "mapreduce/proto"
 	"os"
@@ -100,11 +101,10 @@ func (m *masterImpl) RequestTask(_ context.Context,
 				slog.Info("given task", "worker_addr", req.WorkerAddr, "task_type", pb.Task_REDUCE, "task_id", int32(task.id), "job_id", jobID)
 				tasksAssigned.WithLabelValues("reduce").Inc()
 				return &pb.Task{
-					Type:       pb.Task_REDUCE,
-					TaskId:     int32(task.id),
-					Partition:  int32(task.partition),
-					SpillAddrs: m.workers,
-					JobId:      jobID,
+					Type:      pb.Task_REDUCE,
+					TaskId:    int32(task.id),
+					Partition: int32(task.partition),
+					JobId:     jobID,
 				}, nil
 			}
 		}
@@ -331,10 +331,7 @@ func (m *masterImpl) finalizeJob(j *job) {
 	log.Info("finalizing job")
 
 	m.mtx.Lock()
-	addrs := make([]string, len(j.reduceTasks))
-	for i, t := range j.reduceTasks {
-		addrs[i] = t.workerAddr
-	}
+	numPartitions := j.numPartitions
 	dir := m.dir
 	jobID := j.id
 	m.mtx.Unlock()
@@ -342,26 +339,60 @@ func (m *masterImpl) finalizeJob(j *job) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	indexPath := filepath.Join(dir, "index-"+strconv.FormatInt(int64(jobID), 10))
-	f, e := os.Create(indexPath)
-	check(e)
+	localPath := filepath.Join(dir, "index-"+strconv.FormatInt(int64(jobID), 10))
+	f, err := os.Create(localPath)
+	check(err)
 	defer f.Close()
 	w := bufio.NewWriter(f)
 
-	for partition, addr := range addrs {
-		if addr == "" {
-			continue
+	for partition := 0; partition < numPartitions; partition++ {
+		key := "index/" + strconv.FormatInt(int64(jobID), 10) + "/" + strconv.Itoa(partition)
+		reader, err := m.store.Get(ctx, key)
+		if err != nil {
+			log.Error("failed to get partition index from s3", "key", key, "err", err)
+			f.Close()
+			os.Remove(localPath)
+			m.mtx.Lock()
+			j.status = jobFailed
+			m.mtx.Unlock()
+			return
 		}
-		fetchResultFromWorkerForJob(ctx, addr, partition, jobID, w)
+		if _, err := io.Copy(w, reader); err != nil {
+			reader.Close()
+			f.Close()
+			os.Remove(localPath)
+			log.Error("failed to copy partition index", "key", key, "err", err)
+			m.mtx.Lock()
+			j.status = jobFailed
+			m.mtx.Unlock()
+			return
+		}
+		reader.Close()
 	}
 	check(w.Flush())
+	f.Close()
+
+	finalKey := "index/" + strconv.FormatInt(int64(jobID), 10) + "/final"
+	upload, err := os.Open(localPath)
+	check(err)
+	stat, err := upload.Stat()
+	check(err)
+	if err := m.store.Put(ctx, finalKey, upload, stat.Size()); err != nil {
+		upload.Close()
+		log.Error("failed to upload final index", "err", err)
+		m.mtx.Lock()
+		j.status = jobFailed
+		m.mtx.Unlock()
+		return
+	}
+	upload.Close()
 
 	m.mtx.Lock()
 	j.status = jobDone
-	j.indexPath = indexPath
+	j.indexPath = finalKey
 	m.mtx.Unlock()
 
-	log.Info("job finalized", "index_path", indexPath)
+	log.Info("job finalized", "final_key", finalKey, "local_path", localPath)
 }
 
 func hasFailedTasks(j *job) bool {

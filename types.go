@@ -22,6 +22,10 @@ type WorkerContext struct {
 	writers        []*bufio.Writer
 	files          []*os.File
 	PartitionFiles map[int]string
+	store          ObjectStore
+	s3Keys         []string
+	jobID          int32
+	taskID         int
 }
 
 type taskState int
@@ -69,7 +73,8 @@ type masterImpl struct {
 	nextJobID int32
 	jobs      map[int32]*job
 
-	dir string
+	dir   string
+	store ObjectStore
 }
 
 type mapTask struct {
@@ -86,9 +91,4 @@ type reduceTask struct {
 	state      taskState
 	workerAddr string
 	attempts   int
-}
-
-type workerImpl struct {
-	pb.UnimplementedWorkerServer
-	dir string
 }

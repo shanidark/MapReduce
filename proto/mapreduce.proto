@@ -10,11 +10,6 @@ service Master {
     rpc GetJobStatus(GetJobStatusRequest) returns (GetJobStatusResponse);
 }
 
-service Worker {
-    rpc FetchSpill(FetchSpillRequest) returns (stream SpillChunk);
-    rpc FetchResult(FetchResultRequest) returns (stream SpillChunk);
-}
-
 message WorkerInfo { string addr = 1; }
 message Ack {}
 message TaskRequest { string worker_addr = 1; }
@@ -25,7 +20,7 @@ message Task {
     int32 task_id = 2;
     string file_path = 3;
     int32 partition = 4;
-    repeated string spill_addrs = 5;
+    reserved 5; // used to be spill_addrs, removed after s3 migration
     int32 num_partitions = 6;
     int32 job_id = 7;
 }
@@ -39,22 +34,8 @@ message TaskDone {
     string error_message = 6;
 }
 
-message FetchSpillRequest {
-    int32 partition = 2;
-    int32 job_id = 3;
-}
-
-message FetchResultRequest {
-    int32 partition = 1;
-    int32 job_id = 2;
-}
-
 message HeartbeatRequest {
     string worker_addr = 1;
-}
-
-message SpillChunk {
-    bytes data = 1;
 }
 
 message SubmitJobRequest {

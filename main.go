@@ -1,10 +1,8 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
-	"io"
 	"log/slog"
 	pb "mapreduce/proto"
 	"net"
@@ -14,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -52,31 +51,39 @@ func setupLogger() {
 	slog.SetDefault(slog.New(handler))
 }
 
-func fetchResultFromWorkerForJob(ctx context.Context, addr string, partition int, jobID int32, w *bufio.Writer) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	check(err)
-	defer conn.Close()
-
-	wc := pb.NewWorkerClient(conn)
-	stream, err := wc.FetchResult(ctx, &pb.FetchResultRequest{Partition: int32(partition), JobId: jobID})
-	check(err)
-
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			return
-		}
-		check(err)
-		_, err = w.Write(chunk.Data)
-		check(err)
-	}
-
-}
-
 func runClient(masterAddr string, files []string) {
 	if len(files) == 0 {
 		slog.Error("no files provided to client")
 		os.Exit(1)
+	}
+
+	ctx := context.Background()
+
+	store, err := NewS3Store(ctx)
+	check(err)
+
+	uploadID := uuid.NewString()
+
+	s3Keys := make([]string, 0, len(files))
+	for _, path := range files {
+		f, err := os.Open(path)
+		if err != nil {
+			slog.Error("cannot open input file", "path", path, "err", err)
+			os.Exit(1)
+		}
+		stat, err := f.Stat()
+		check(err)
+
+		key := "input/" + uploadID + "/" + filepath.Base(path)
+		slog.Info("uploading input", "path", path, "key", key, "size", stat.Size())
+
+		if err := store.Put(ctx, key, f, stat.Size()); err != nil {
+			f.Close()
+			slog.Error("upload failed", "path", path, "err", err)
+			os.Exit(1)
+		}
+		f.Close()
+		s3Keys = append(s3Keys, key)
 	}
 
 	conn, err := grpc.NewClient(masterAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -84,12 +91,10 @@ func runClient(masterAddr string, files []string) {
 	defer conn.Close()
 	mc := pb.NewMasterClient(conn)
 
-	ctx := context.Background()
-
-	resp, err := mc.SubmitJob(ctx, &pb.SubmitJobRequest{FilePaths: files})
+	resp, err := mc.SubmitJob(ctx, &pb.SubmitJobRequest{FilePaths: s3Keys})
 	check(err)
 	jobID := resp.JobId
-	slog.Info("job submitted", "job_id", jobID)
+	slog.Info("job submitted", "job_id", jobID, "num_files", len(s3Keys))
 
 	for {
 		time.Sleep(2 * time.Second)
@@ -117,11 +122,16 @@ func runMaster(minWorkers int, metricsAddr string) {
 	check(e)
 	cleanup(dir)
 
+	ctx := context.Background()
+	store, err := NewS3Store(ctx)
+	check(err)
+
 	impl := &masterImpl{
 		minWorkers: minWorkers,
 		lastSeen:   make(map[string]time.Time),
 		jobs:       make(map[int32]*job),
 		dir:        dir,
+		store:      store,
 	}
 
 	lis, e := net.Listen("tcp", ":50051")
@@ -151,25 +161,21 @@ func runWorker(mAddr, myAddr, metricsAddr string) {
 	check(e)
 	log.Info("worker starting")
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	store, err := NewS3Store(ctx)
+	check(err)
+
 	conn, err := grpc.NewClient(mAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	check(err)
 	masterClient := pb.NewMasterClient(conn)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	_, err = masterClient.RegisterWorker(ctx, &pb.WorkerInfo{Addr: myAddr})
 	check(err)
 	log.Info("registered worker")
 
 	go heartbeatLoop(ctx, masterClient, myAddr)
-
-	lis, err := net.Listen("tcp", myAddr)
-	check(err)
-	s := grpc.NewServer()
-	pb.RegisterWorkerServer(s, &workerImpl{dir: dir})
-	go s.Serve(lis)
-	log.Info("worker gRPC server listening")
 
 	for {
 		task, err := masterClient.RequestTask(ctx, &pb.TaskRequest{WorkerAddr: myAddr})
@@ -182,9 +188,9 @@ func runWorker(mAddr, myAddr, metricsAddr string) {
 		}
 		switch task.Type {
 		case pb.Task_MAP:
-			doMap(task, dir, myAddr, masterClient, ctx)
+			doMap(task, dir, myAddr, store, masterClient, ctx)
 		case pb.Task_REDUCE:
-			doReduce(task, dir, myAddr, masterClient, ctx)
+			doReduce(task, dir, myAddr, store, masterClient, ctx)
 		case pb.Task_SHUTDOWN:
 			return
 		case pb.Task_IDLE:

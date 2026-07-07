@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -19,11 +21,33 @@ func Process(word string) string {
 	return reg_nonWord.ReplaceAllString(word, "")
 }
 
-func (wc *WorkerContext) Close() {
+func (wc *WorkerContext) Close(ctx context.Context) error {
 	for i, w := range wc.writers {
 		check(w.Flush())
 		check(wc.files[i].Close())
 	}
+
+	for i, path := range wc.PartitionFiles {
+		f, err := os.Open(path)
+		check(err)
+		stat, err := f.Stat()
+		if err != nil {
+			f.Close()
+			return err
+		}
+		if stat.Size() == 0 {
+			f.Close()
+			os.Remove(path)
+			continue
+		}
+		if err := wc.store.Put(ctx, wc.s3Keys[i], f, stat.Size()); err != nil {
+			f.Close()
+			return err
+		}
+		f.Close()
+		os.Remove(path)
+	}
+	return nil
 }
 
 func Map(chunk Chunk, wc *WorkerContext) {

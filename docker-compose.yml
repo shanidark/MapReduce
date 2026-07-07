@@ -6,27 +6,41 @@ services:
       - "--mode=master"
       - "--min_workers=3"
     volumes:
-      - ./input:/data:ro
       - ./output:/workdir
     environment:
-      - LOG_FORMAT=json
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: mapreduce
+      S3_USE_SSL: "false"
+      LOG_FORMAT: json
     working_dir: /workdir
     ports:
       - "50051:50051"
       - "9090:9090"
+    depends_on:
+      minio:
+        condition: service_healthy
 
   worker-1:
     build: .
     container_name: mr-worker-1
     command: ["--mode=worker", "--addr=worker-1:50052", "--master_addr=master:50051"]
     volumes:
-      - ./input:/data:ro
       - worker-1-workdir:/workdir
     environment:
-      - LOG_FORMAT=json
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: mapreduce
+      S3_USE_SSL: "false"
+      LOG_FORMAT: json
     working_dir: /workdir
     depends_on:
-      - master
+      minio:
+        condition: service_healthy
+      master:
+        condition: service_started
     ports:
       - "9092:9090"
     restart: on-failure
@@ -36,13 +50,20 @@ services:
     container_name: mr-worker-2
     command: ["--mode=worker", "--addr=worker-2:50052", "--master_addr=master:50051"]
     volumes:
-      - ./input:/data:ro
       - worker-2-workdir:/workdir
     environment:
-      - LOG_FORMAT=json
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: mapreduce
+      S3_USE_SSL: "false"
+      LOG_FORMAT: json
     working_dir: /workdir
     depends_on:
-      - master
+      minio:
+        condition: service_healthy
+      master:
+        condition: service_started
     ports:
       - "9093:9090"
     restart: on-failure
@@ -52,13 +73,20 @@ services:
     container_name: mr-worker-3
     command: ["--mode=worker", "--addr=worker-3:50052", "--master_addr=master:50051"]
     volumes:
-      - ./input:/data:ro
       - worker-3-workdir:/workdir
     environment:
-      - LOG_FORMAT=json
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: mapreduce
+      S3_USE_SSL: "false"
+      LOG_FORMAT: json
     working_dir: /workdir
     depends_on:
-      - master
+      minio:
+        condition: service_healthy
+      master:
+        condition: service_started
     ports:
       - "9094:9090"
     restart: on-failure
@@ -69,9 +97,17 @@ services:
     volumes:
       - ./input:/data:ro
     environment:
-      - LOG_FORMAT=json
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: mapreduce
+      S3_USE_SSL: "false"
+      LOG_FORMAT: json
     depends_on:
-      - master
+      minio:
+        condition: service_healthy
+      master:
+        condition: service_started
 
   prometheus:
     image: prom/prometheus:latest
@@ -93,7 +129,25 @@ services:
     ports:
       - "3000:3000"
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000" # s3 api
+      - "9001:9001" # web console
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
 volumes:
+  minio-data:
   worker-1-workdir:
   worker-2-workdir:
   worker-3-workdir:
